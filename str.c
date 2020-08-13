@@ -7,129 +7,22 @@
 #include "str.h"
 #include "util.h"
 
-void create_tag(tag *t, size_t contsize)
+#define BUFSIZE_NAME 16
+#define BUFSIZE_CONTENT 128
+
+char *strnchr(const char *s, size_t n, char c)
 {
-	t->tagcont = emalloc(contsize);
-}
-void free_tag(tag *t)
-{
-	free(t->tagcont);
-}
-
-int get_tag_pos(const char *s, size_t *len, char **off)
-{
-	char name[TAGNAME_SIZE];
-	regex_t otag;
-	char ctag[TAGNAME_SIZE + 3];
-	char *ctagp;
-	int i, n;
-
-	regcomp(&otag, "<[a-z]+>", REG_EXTENDED);
-	regmatch_t rmoff;
-	if (regexec(&otag, s, 1, &rmoff, 0))
-		return 1;
-	regfree(&otag);
-
-	i = rmoff.rm_so + 1;
-	n = rmoff.rm_eo - rmoff.rm_so - 2;
-	strncpy(name, s + i, n);
-	name[n] = '\0';
-
-	sprintf(ctag, "</%s>", name);
-	ctagp = strstr(s, ctag);
-	if (!ctagp)
-		return 1;
-
-	*len = (ctagp - s) + strlen(ctag) - rmoff.rm_so;
-	*off = (char *)(s + rmoff.rm_so);
-
-	return 0;
-}
-int get_tag_pos_n(const char *s, const char *name, size_t *len, char **off)
-{
-	char tag[TAGNAME_SIZE + 3];
-	char *otagp;
-	char *ctagp;
-
-	sprintf(tag, "<%s>", name);
-	otagp = strstr(s, tag);
-	if (!otagp)
-		return 1;
-
-
-	sprintf(tag, "</%s>", name);
-	ctagp = strstr(s, tag);
-	if (!otagp)
-		return 1;
-
-	*len = (ctagp - otagp) + strlen(tag);
-	*off = otagp;
-	return 0;
+	while (n--) {
+		if (*s == c)
+			return (char *)s;
+		if (*s++ == '\0')
+			break;
+	}
+	return NULL;
 }
 
-int scan_tag(const char *s, tag *t)
+char *match_pair(const char *s, const size_t n, const char match)
 {
-	regex_t otag;
-	char ctag[TAGNAME_SIZE + 3];
-	char *ctagp;
-	int i, n;
-
-	regcomp(&otag, "<[a-z]+>", REG_EXTENDED);
-	regmatch_t off;
-	if (regexec(&otag, s, 1, &off, 0))
-		return 1;
-	regfree(&otag);
-
-	i = off.rm_so + 1;
-	n = off.rm_eo - off.rm_so - 2;
-	strncpy(t->name, s + i, n);
-	t->name[n] = '\0';
-	t->s = (char *)(s + off.rm_so);
-
-	sprintf(ctag, "</%s>", t->name);
-	ctagp = strstr(s, ctag);
-	if (!ctagp)
-		return 1;
-
-	i += n + 1;
-	n = ctagp - (s + i);
-	strncpy(t->tagcont, s + i, n);
-	t->tagcont[n] = '\0';
-	t->e = ctagp + strlen(ctag);
-
-	return 0;
-}
-int scan_tag_n(const char *s, const char *name, tag *t)
-{
-	char tag[TAGNAME_SIZE + 3];
-	char *otagp;
-	char *ctagp;
-	int i, n;
-
-	strcpy(t->name, name);
-
-	sprintf(tag, "<%s>", t->name);
-	otagp = strstr(s, tag);
-	if (!otagp)
-		return 1;
-
-	t->s = otagp;
-
-	sprintf(tag, "</%s>", t->name);
-	ctagp = strstr(s, tag);
-	if (!otagp)
-		return 1;
-
-	i = (otagp - s) + strlen(tag) - 1;
-	n = (ctagp - s) - i;
-	strncpy(t->tagcont, s + i, n);
-	t->tagcont[n] = '\0';
-	t->e = ctagp + strlen(tag);
-
-	return 0;
-}
-
-char *match_pair(const char *s, const size_t n, const char match) {
 	char c = s[0];
 	size_t depth = 1;
 	char *cur;
@@ -171,7 +64,7 @@ char *find_free_char(const char *s, const size_t n, const char c, const char *pa
 	return NULL;
 }
 
-int strip(const char *s, size_t n, char **o)
+size_t strip(const char *s, size_t n, char **o)
 {
 	if (n == 0) {
 		*o = (char *)s;
@@ -203,5 +96,215 @@ int replace(const char *s, const char *sold, const char *snew, char **o)
 	strcpy(*o + n, snew);
 	strcpy(*o + n + lnew, s + n + lold);
 	(*o)[strlen(s) + lnew - lold] = '\0';
+	return 0;
+}
+
+tag_t *create_tag()
+{
+	tag_t *t = malloc(sizeof(tag_t));
+	if (!t)
+		return NULL;
+	t->namelen = BUFSIZE_NAME;
+	t->name = malloc(BUFSIZE_NAME);
+	if (!t->name) {
+		free(t);
+		return NULL;
+	}
+	t->contentlen = BUFSIZE_CONTENT;
+	t->content = malloc(BUFSIZE_CONTENT);
+	if (!t->content) {
+		free(t->name);
+		free(t);
+		return NULL;
+	}
+	return t;
+}
+void free_tag(tag_t *t)
+{
+	free(t->content);
+	free(t->name);
+}
+
+int get_tag_pos(const char *s, size_t *len, char **off)
+{
+	regex_t otag;
+	regcomp(&otag, "<[a-z]+>", REG_EXTENDED);
+	regmatch_t rmoff;
+	if (regexec(&otag, s, 1, &rmoff, 0))
+		return 1;
+	regfree(&otag);
+
+	size_t i = rmoff.rm_so + 1;
+	size_t n = rmoff.rm_eo - rmoff.rm_so - 2;
+
+	char *ctag = malloc(n + 4);
+	ctag[0] = '\0';
+	strcat(ctag, "</");
+	strncat(ctag, s + i, n);
+	strcat(ctag, ">");
+	char *ctagp = strstr(s, ctag);
+	if (!ctagp)
+		return 1;
+
+	*len = (ctagp - s) + strlen(ctag) - rmoff.rm_so;
+	*off = (char *)(s + rmoff.rm_so);
+	free(ctag);
+
+	return 0;
+}
+int get_tag_pos_n(const char *s, const char *name, size_t *len, char **off)
+{
+	char *tag = malloc(strlen(name) + 4);
+	sprintf(tag, "<%s>", name);
+	char *otagp = strstr(s, tag);
+	if (!otagp)
+		return 1;
+
+	sprintf(tag, "</%s>", name);
+	char *ctagp = strstr(s, tag);
+	if (!otagp)
+		return 1;
+
+	*len = (ctagp - otagp) + strlen(tag);
+	*off = otagp;
+	free(tag);
+	return 0;
+}
+
+int scan_tag_old(const char *s, tag_t *t)
+{
+	regex_t otag;
+	char *ctagp;
+	int i, n;
+
+	regcomp(&otag, "<[a-z]+>", REG_EXTENDED);
+	regmatch_t off;
+	if (regexec(&otag, s, 1, &off, 0))
+		return 1;
+	regfree(&otag);
+	t->start = (char *)(s + off.rm_so);
+
+	i = off.rm_so + 1;
+	n = off.rm_eo - off.rm_so - 2;
+	if (n + 1 > t->namelen) {
+		t->namelen = n + 1;
+		t->name = realloc(t->name, t->namelen);
+	}
+	strncpy(t->name, s + i, n);
+	t->name[n] = '\0';
+
+	char *ctag = malloc(strlen(t->name) + 4);
+	sprintf(ctag, "</%s>", t->name);
+	ctagp = strstr(s, ctag);
+	if (!ctagp)
+		return 1;
+	t->end = ctagp + strlen(ctag);
+	free(ctag);
+
+	i += n + 1;
+	n = ctagp - (s + i);
+	if (n + 1 > t->contentlen) {
+		t->contentlen = n + 1;
+		t->content = realloc(t->content, t->contentlen);
+	}
+	strncpy(t->content, s + i, n);
+	t->content[n] = '\0';
+
+	return 0;
+}
+int scan_tag_n_old(const char *s, const char *name, tag_t *t)
+{
+	char *otagp;
+	char *ctagp;
+	int i, n;
+
+	int namesize = strlen(name) + 1;
+	if (namesize > t->namelen) {
+		t->namelen = namesize;
+		t->name = realloc(t->name, t->namelen);
+	}
+	strcpy(t->name, name);
+
+	char *tag = malloc(strlen(t->name) + 4);
+	sprintf(tag, "<%s>", t->name);
+	otagp = strstr(s, tag);
+	if (!otagp)
+		return 1;
+	t->start = otagp;
+
+	sprintf(tag, "</%s>", t->name);
+	ctagp = strstr(s, tag);
+	if (!otagp)
+		return 1;
+	t->end = ctagp + strlen(tag);
+
+	i = (otagp - s) + strlen(tag) - 1;
+	n = (ctagp - s) - i;
+	if (n + 1 > t->contentlen) {
+		t->contentlen = n + 1;
+		t->content = realloc(t->content, t->contentlen);
+	}
+	strncpy(t->content, s + i, n);
+	t->content[n] = '\0';
+
+	return 0;
+}
+int scan_tag(const char *s, size_t n, tag_t *t)
+{
+	/* find name */
+	s = strnchr(s, n, '<');
+	if (!s)
+		return 1;
+	t->start = (char *)s;
+	t->name = (char *)++s;
+
+	s = strnchr(s, n, '>');
+	if (!s)
+		return 2;
+	t->namelen = s - t->name;
+
+	/* find content */
+	t->content = (char *)(s + 1);
+	while ((s = strnchr(s, n, '<'))) {
+		if (*(++s) == '/'
+				&& !strncmp(++s, t->name, t->namelen)
+				&& *(s + t->namelen) == '>')
+			break;
+	}
+	if (!s)
+		return 3;
+	t->contentlen = s - t->content - 2;
+	t->end = (char *)(s + t->namelen + 1);
+
+	return 0;
+}
+int scan_tag_n(const char *s, size_t n, const char *name, tag_t *t)
+{
+
+	/* find name */
+	t->namelen = strlen(name);
+	while ((s = strnchr(s, n, '<'))) {
+		if (!strncmp(++s, name, t->namelen)
+				&& *(s + t->namelen) == '>')
+			break;
+	}
+	if (!s)
+		return 1;
+	t->start = (char *)(s - 1);
+	t->name = (char *)s;
+
+	/* find content */
+	t->content = (char *)(s + t->namelen + 1);
+	while ((s = strnchr(s, n, '<'))) {
+		if (*(++s) == '/'
+				&& !strncmp(++s, t->name, t->namelen)
+				&& *(s + t->namelen) == '>')
+			break;
+	}
+	if (!s)
+		return 3;
+	t->contentlen = s - t->content - 2;
+	t->end = (char *)(s + t->namelen + 1);
+
 	return 0;
 }
