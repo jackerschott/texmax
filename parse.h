@@ -3,39 +3,28 @@
 
 #include <stddef.h>
 
-#define CMDTYPE_INIT_PROMPT 0
-#define CMDTYPE_META 1
-#define CMDTYPE_MATH 2
-#define CMDTYPE_EPLOT 3
-#define CMDTYPE_INVALID -1
+#define PROMPT_INPUT 0
+#define PROMPT_QUESTION 1
 
-#define PARSE_MATH 	0
-
-#define DRAW_MATH 	0
-#define DRAW_PLOT 	1
-#define DRAW_TEXT 	2
-#define DRAW_BATCH 	3
-
-struct maxout;
-typedef struct maxout maxout;
+typedef struct maxout_t maxout_t;
+struct maxout_t;
 
 typedef int cmdtype_t;
-typedef int parsetype_t;
-typedef int drawtype_t;
+typedef int prompttype_t;
 
-int get_error(const maxout *const o);
-int has_closing_question(const maxout *const o);
-void get_closing_prompt(const maxout *const o, char *prompt, size_t *promptsize);
+cmdtype_t preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize);
+int has_prompt(const char *out);
 
-cmdtype_t preparse_cmd(const char *cmd, char *pcmd, size_t *pcmdsize);
-int raw_out_has_prompt(const char *out);
+maxout_t *alloc_maxima_out();
+void free_maxima_out(maxout_t *o);
+int parse_maxima_out(maxout_t *out, const char *str, const size_t strlen);
 
-maxout *parse_maxima_out(const char *outbuf, size_t outlen, cmdtype_t cmdtype);
-void free_maxima_out(maxout *o);
+int get_closing_prompt(const maxout_t *o, char **prompt, size_t *promptsize, prompttype_t *type);
+int set_answer(maxout_t *o, const char *answer);
 
-int write_latex_res(const char *path, const maxout *const pout,
-		const char *cmd, const char *prompt, const int cmdtype);
 int create_latex_doc(const char *path, const char *respath);
-int write_log(const char *path, const maxout *const pout, const char *cmd, const char *prompt);
+int write_latex(const char *path, const maxout_t *out,
+		const char *prompt, const char *cmd, cmdtype_t cmdtype);
+int write_log(const char *path, const maxout_t *out, const char *prompt, const char *cmd);
 
 #endif /* PARSE_H */

@@ -7,7 +7,7 @@
 
 void *emalloc(size_t size);
 void *erealloc(void *ptr, size_t size);
-void die(const char *fmt, ...);
+void die(int err, const char *fmt, ...);
 void pathcat(const char *p1, const char *p2, char **dest);
 
 #endif /* UTIL_H */

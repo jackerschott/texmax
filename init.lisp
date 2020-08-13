@@ -6,11 +6,11 @@
 #+clisp (setf custom:*suppress-check-redefinition* t)
 (setf *alt-display2d* 'latex-print)
 (setf *alt-display1d* 'regular-print)
-(setf *prompt-prefix* "<prompt>")
+(setf *prompt-prefix* "<p>")
 ;;the newline at the end of the next line is needed, as we otherwise might run into
 ;;weird issues with KPtyProcess caching the line of the prompt, and sending it twice
 ;;to readStdOut()
-(setf *prompt-suffix* "</prompt>
+(setf *prompt-suffix* "</p>
 ")
 ;(setf *general-display-prefix* "DISPLAY_PREFIX")
 ;(setf *maxima-prolog* "Hello World")
@@ -44,24 +44,24 @@
 
 
 (defun latex-print (x)
-  (princ "<result>")
-  (princ "<text>")
+  (princ "<r>")
+  (princ "<t>")
   (linear-displa x )
-  (princ "</text>")
+  (princ "</t>")
 
   (let ((ccol 1))
     (mapc #'princ
-        (tex x '("<latex>") '("</latex>") 'mparen 'mparen)))
+        (tex x '("<l>") '("</l>") 'mparen 'mparen)))
 
-  (princ "</result>")
+  (princ "</r>")
 )
 
 (defun regular-print (x)
-  (princ "<result>")
-  (princ "<text>")
+  (princ "<r>")
+  (princ "<t>")
   (linear-displa x)
-  (princ "</text>")
-  (princ "</result>")
+  (princ "</t>")
+  (princ "</r>")
 )
 
 (defun cantor-inspect (var)

@@ -5,7 +5,7 @@
 
 #include "util.h"
 
-void die(const char *fmt, ...)
+void die(int err, const char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
@@ -19,21 +19,21 @@ void die(const char *fmt, ...)
 		fputc('\n', stderr);
 	}
 
-	exit(1);
+	exit(err);
 }
 
 void *emalloc(size_t size)
 {
 	void *p = malloc(size);
 	if (!p)
-		die("malloc:");
+		die(-1, "malloc:");
 	return p;
 }
 void *erealloc(void *ptr, size_t size)
 {
 	void *p = realloc(ptr, size);
 	if (!p)
-		die("realloc:");
+		die(-1, "realloc:");
 	return p;
 }
 

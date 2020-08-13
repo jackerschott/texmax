@@ -1,15 +1,18 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <stddef.h>
+
 static const char *cache_dir = ".vimax";
 static const char *fifo_name = "cmd";
 static const char *latex_doc_name = "doc.tex";
 static const char *latex_res_name = "res.tex";
 static const char *log_name = "max.log";
 
-static const char *mxargs[] = {
+static char *const maxima_args[] = {
+	"maxima",
 	"--quiet",
-	"--userdir=/home/jona/.local/share/maxima",
+	"--init-lisp=init.lisp",
 	NULL,
 };
 
@@ -31,14 +34,17 @@ static const char *latex_cmd_env[] = {
 	"\\texttt{", "} \\\\\n"
 };
 
-static const char *latex_plot_env[] = {
-	"\\includegraphics[width=0.8\\textwidth]{", "}\n" \
-	"\\end{samepage}\n" \
-	"\\bigskip\n\n"
+static const char *latex_text_env[] = {
+	"\\texttt{", "} \\\\\n"
 };
 static const char *latex_math_env[] = {
 	"\\begin{flalign}\n",
 	"\n\\end{flalign}\n" \
+	"\\end{samepage}\n" \
+	"\\bigskip\n\n"
+};
+static const char *latex_plot_env[] = {
+	"\\includegraphics[width=0.8\\textwidth]{", "}\n" \
 	"\\end{samepage}\n" \
 	"\\bigskip\n\n"
 };

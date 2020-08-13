@@ -8,48 +8,61 @@
 #include "str.h"
 #include "util.h"
 
+#define CAPACITY_CHUNKS 8
 
-typedef struct {
+#define CMD_NONE 0
+#define CMD_EPLOT 1
+#define CMD_BATCH 2
+#define CMD_MATH 3
+#define CMD_INVALID -1
+
+#define CHUNK_MSG 0
+#define CHUNK_INPROMPT 1
+#define CHUNK_RESULT 2
+#define CHUNK_QUESTION 3
+
+typedef int chunktype_t;
+
+typedef struct msg_t msg_t;
+typedef struct inprompt_t inprompt_t;
+typedef struct result_t result_t;
+typedef struct question_t question_t;
+typedef struct chunk_t chunk_t;
+typedef struct func_t func_t;
+
+struct func_t {
 	char *name;
 	unsigned int nargs;
 	char **args;
-} func;
-
-typedef struct {
-	char *text;
-	char *latex;
-} result;
-struct maxout {
-	size_t chunkarrsize;
-	size_t chunksize;
-	size_t nchunks;
-	result *res;
-	char *log;
-	char *newprompt;
-	int question;
-	int err;
-	char *errmsg;
 };
 
-int get_error(const maxout *const o)
-{
-	return o->err;
-}
-int has_closing_question(const maxout *const o)
-{
-	return o->question;
-}
-void get_closing_prompt(const maxout *const o, char *prompt, size_t *promptsize)
-{
-	int newpromptsize = strlen(o->newprompt) + 1;
-	if (newpromptsize > *promptsize) {
-		*promptsize = newpromptsize;
-		prompt = erealloc(prompt, *promptsize);
-	}
-	strcpy(prompt, o->newprompt);
-}
+struct msg_t {
+	char *text;
+};
+struct inprompt_t {
+	char *text;
+};
+struct result_t {
+	char *text;
+	char *latex;
+};
+struct question_t {
+	char *text;
+	char *latex;
+	char *answer;
+};
 
-int check_func(const char *cmd, const char *name, char **argbeg, char **argend)
+struct chunk_t {
+	void *content;
+	chunktype_t type;
+};
+struct maxout_t {
+	size_t capchunks;
+	size_t nchunks;
+	chunk_t *chunks;
+};
+
+static int check_func(const char *cmd, const char *name, char **argbeg, char **argend)
 {
 	char *c = strstr(cmd, name);
 	if (!c)
@@ -66,8 +79,8 @@ int check_func(const char *cmd, const char *name, char **argbeg, char **argend)
 
 	return 0;
 }
-void parse_func(const char *cmd, const char *name,
-		const char *argbeg, const char *argend, func *f)
+static void parse_func(const char *cmd, const char *name,
+		const char *argbeg, const char *argend, func_t *f)
 {
 	size_t namelen = strlen(name);
 	f->name = emalloc(namelen + 1);
@@ -102,14 +115,14 @@ void parse_func(const char *cmd, const char *name,
 	f->nargs = nargs + 1;
 	f->args = erealloc(f->args, nargs * sizeof(char *));
 }
-void free_func(func *f)
+static void free_func(func_t *f)
 {
 	free(f->name);
 	for (unsigned int i = 0; i < f->nargs; ++i) {
 		free(f->args[i]);
 	}
 }
-void func_to_str(func *f, char *s, size_t *size)
+static void func_to_str(func_t *f, char *s, size_t *size)
 {
 	if (s == NULL) {
 		int len = strlen(f->name) + 2;
@@ -132,7 +145,7 @@ void func_to_str(func *f, char *s, size_t *size)
 	}
 	strcat(s, ")");
 }
-cmdtype_t preparse_cmd(const char *cmd, char *pcmd, size_t *pcmdsize)
+cmdtype_t preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize)
 {
 	size_t cmdlen = strlen(cmd);
 
@@ -141,10 +154,10 @@ cmdtype_t preparse_cmd(const char *cmd, char *pcmd, size_t *pcmdsize)
 
 	char last = cmd[cmdlen - 1];
 	if (last != ';' && last != '$')
-		return CMDTYPE_INVALID;
+		return CMD_INVALID;
 
 	// TODO: Parse command
-	func f;
+	func_t f;
 	char *argbeg, *argend;
 	if (!check_func(cmd, "eplot2d", &argbeg, &argend)) {
 		parse_func(cmd, "eplot2d", argbeg, argend, &f);
@@ -172,179 +185,280 @@ cmdtype_t preparse_cmd(const char *cmd, char *pcmd, size_t *pcmdsize)
 
 		size_t newcmdsize = cmdlen + newfstrsize - (fend - fbeg);
 		if (newcmdsize > *pcmdsize) {
-			pcmd = erealloc(pcmd, newcmdsize);
+			*pcmd = erealloc(*pcmd, newcmdsize);
 			*pcmdsize = newcmdsize;
 		}
 
-		pcmd[0] = '\0';
-		strncat(pcmd, cmd, fbeg - cmd);
-		strcat(pcmd, newfstr);
-		strcat(pcmd, fend);
+		(*pcmd)[0] = '\0';
+		strncat(*pcmd, cmd, fbeg - cmd);
+		strcat(*pcmd, newfstr);
+		strcat(*pcmd, fend);
 
-		return CMDTYPE_EPLOT;
+		return CMD_EPLOT;
 	} else {
 		size_t newcmdsize = cmdlen + 1;
 		if (newcmdsize > *pcmdsize) {
-			pcmd = erealloc(pcmd, newcmdsize);
+			*pcmd = erealloc(*pcmd, newcmdsize);
 			*pcmdsize = newcmdsize;
 		}
 
-		strcpy(pcmd, cmd);
+		strcpy(*pcmd, cmd);
 
-		return CMDTYPE_MATH;
+		return CMD_MATH;
 	}
 }
-int raw_out_has_prompt(const char *out)
+
+int has_prompt(const char *out)
 {
-	return strstr(out, "</prompt>") != NULL;
+	return strstr(out, "</p>") != NULL;
 }
 
-static int is_error(char *bare)
+maxout_t *alloc_maxima_out()
 {
-	return 0;
+	maxout_t *out = malloc(sizeof(maxout_t));
+	if (!out)
+		return NULL;
+	out->capchunks = CAPACITY_CHUNKS;
+	out->nchunks = 0;
+	out->chunks = malloc(out->capchunks * sizeof(chunk_t));
+	if (!out->chunks)
+		return NULL;
+	return out;
 }
-static int is_question(char *prompt)
+void free_maxima_out(maxout_t *o)
 {
-	return 0;
-}
-
-void comp_chunk_dims(const char *outbuf, size_t outlen,
-		size_t *_chunkarrsize, size_t *_chunksize)
-{
-	size_t chunksize = 0;
-	size_t chunkarrsize = 0;
-	char *cur = (char *)outbuf;
-	char *tpos;
-	size_t tlen;
-	size_t barelen;
-	/* Skip non printable characters between chunks, such that
-	   these are not counted as bare chunk (without case
-	   distinction or assuming to much). That non printable 
-	   characters are not counted for chunksize is actually not
-	   that important */
-	while (cur - outbuf < outlen && !get_tag_pos(cur, &tlen, &tpos)) {
-		if (tlen > chunksize)
-			chunksize = tlen;
-		++chunkarrsize;
-
-		barelen = strip(cur, tpos - cur, &cur);
-		if (barelen > chunksize)
-			chunksize = barelen;
-		if (barelen > 0)
-			++chunkarrsize;
-
-		cur = tpos + tlen;
+	for (int i = 0; i < o->nchunks; ++i) {
+		if (o->chunks[i].type == CHUNK_MSG) {
+			msg_t *m = (msg_t *)(o->chunks[i].content);
+			free(m->text);
+			free(m);
+		} else if (o->chunks[i].type == CHUNK_INPROMPT) {
+			inprompt_t *p = (inprompt_t *)(o->chunks[i].content);
+			free(p->text);
+			free(p);
+		} else if (o->chunks[i].type == CHUNK_RESULT) {
+			result_t *r = (result_t *)(o->chunks[i].content);
+			free(r->text);
+			free(r->latex);
+			free(r);
+		} else if (o->chunks[i].type == CHUNK_QUESTION) {
+			question_t *q = (question_t *)(o->chunks[i].content);
+			free(q->text);
+			free(q->latex);
+			if (q->answer)
+				free(q->answer);
+		}
 	}
-	barelen = strip(cur, outbuf + outlen - cur, &cur);
-	if (barelen > chunksize)
-		chunksize = barelen;
-	if (barelen > 0)
-		++chunkarrsize;
-
-	*_chunksize = chunksize;
-	*_chunkarrsize = chunkarrsize;
+	free(o->chunks);
+	free(o);
 }
-maxout *parse_maxima_out(const char *outbuf, const size_t outlen, const cmdtype_t cmdtype)
+int parse_maxima_out(maxout_t *out, const char *str, const size_t strlen)
 {
-	size_t chunkarrsize, chunksize;
-	comp_chunk_dims(outbuf, outlen, &chunkarrsize, &chunksize);
+	int retval = 0;
 
-	maxout *out = emalloc(sizeof(maxout));
-	out->chunkarrsize = chunkarrsize;
-	out->chunksize = chunksize;
-	out->res = emalloc(chunkarrsize * sizeof(result));
-	for (int i = 0; i < chunkarrsize; ++i) {
-		out->res[i].latex = emalloc(chunksize);
-		out->res[i].text = emalloc(chunksize);
-	}
-	out->log = emalloc(chunksize * chunkarrsize + 1);
-	out->newprompt = emalloc(chunksize);
-	out->errmsg = emalloc(chunksize);
-	
-	tag t, s;
-	create_tag(&t, out->chunksize);
-	create_tag(&s, out->chunksize);
-	char *bare = malloc(out->chunksize + 1);
-	out->log[0] = '\0';
-	out->err = 0;
-	out->question = 0;
-
-	char *cur = (char *)outbuf;
-	int n;
-	for (n = 0; n < out->chunkarrsize; ++n) {
-		scan_tag(cur, &t);
-
-		size_t barelen = strip(cur, t.s - cur, &cur);
-		if (barelen > 0) {
-			strncpy(bare, cur, barelen);
-			bare[barelen] = '\0';
-
-			strcat(out->log, bare);
-			strcat(out->log, "\n");
-
-			out->err = is_error(bare);
-			if (out->err) {
-				out->errmsg = bare;
-				break;
-			}
+	char *cur = (char *)str;
+	char *end = (char *)(str + strlen);
+	tag_t tag;
+	while (!scan_tag(cur, end - cur, &tag)) {
+		if (out->nchunks >= out->capchunks) {
+			out->capchunks += CAPACITY_CHUNKS;
+			chunk_t *c = realloc(out->chunks, out->capchunks * sizeof(chunk_t));
+			if (!c)
+				return 1;
+			out->chunks = c;
 		}
 
-		if (strcmp(t.name, "result") == 0) {
-			scan_tag_n(t.tagcont, "latex", &s);
-			strcpy(out->res[n].latex, s.tagcont);
+		size_t msglen = strip(cur, tag.start - cur, &cur);
+		if (msglen > 0) {
+			/* Parse message before tag */
+			msg_t *msg = malloc(sizeof(msg_t));
+			if (!msg)
+				return 1;
 
-			scan_tag_n(t.tagcont, "text", &s);
-			strcpy(out->res[n].text, s.tagcont);
+			msg->text = malloc(msglen + 1);
+			if (!msg->text) {
+				free(msg);
+				return 1;
+			}
+			strncpy(msg->text, cur, msglen);
+			msg->text[msglen] = '\0';
 
-			strcat(out->log, s.tagcont);
-		} else if (strcmp(t.name, "prompt") == 0) {
-			strcpy(out->newprompt, t.tagcont);
-			out->question = is_question(t.tagcont);
+			out->chunks[out->nchunks].content = msg;
+			out->chunks[out->nchunks].type = CHUNK_MSG;
+			++out->nchunks;
+		}
+
+		if (strncmp(tag.name, "r", tag.namelen) == 0) {
+			/* Parse result tag */
+			result_t *res = malloc(sizeof(result_t));
+			if (!res)
+				return 1;
+
+			tag_t subtag;
+			char *content;
+			size_t contentlen;
+			scan_tag_n(tag.content, tag.contentlen, "t", &subtag);
+			contentlen = strip(subtag.content, subtag.contentlen, &content);
+
+			res->text = malloc(contentlen + 1);
+			if (!res->text) {
+				free(res);
+				return 1;
+			}
+			strncpy(res->text, content, contentlen);
+			res->text[contentlen] = '\0';
+
+			scan_tag_n(tag.content, tag.contentlen, "l", &subtag);
+			contentlen = strip(subtag.content, subtag.contentlen, &content);
+
+			res->latex = malloc(contentlen + 1);
+			if (!res->latex) {
+				free(res->text);
+				free(res);
+				return 1;
+			}
+			strncpy(res->latex, content, contentlen);
+			res->latex[contentlen] = '\0';
+
+			out->chunks[out->nchunks].content = res;
+			out->chunks[out->nchunks].type = CHUNK_RESULT;
+			++out->nchunks;
+		} else if (strncmp(tag.name, "p", tag.namelen) == 0) {
+			/* Parse prompt tag */
+			tag_t subtag;
+			char *content;
+			size_t contentlen;
+			if (!scan_tag_n(tag.content, tag.contentlen, "t", &subtag)) {
+				/* Parse question */
+				contentlen = strip(subtag.content, subtag.contentlen, &content);
+
+				question_t *question = malloc(sizeof(question_t));
+				if (!question)
+					return 1;
+
+				question->text = malloc(contentlen + 1);
+				if (!question->text) {
+					free(question);
+					return 1;
+				}
+				strncpy(question->text, content, contentlen);
+				question->text[contentlen] = '\0';
+
+				scan_tag_n(tag.content, tag.contentlen, "l", &subtag);
+				contentlen = strip(subtag.content, subtag.contentlen, &content);
+
+				question->latex = malloc(contentlen + 1);
+				if (!question->latex) {
+					free(question->text);
+					free(question);
+					return 1;
+				}
+				strncpy(question->latex, content, contentlen);
+				question->latex[contentlen] = '\0';
+
+				question->answer = NULL;
+
+				out->chunks[out->nchunks].content = question;
+				out->chunks[out->nchunks].type = CHUNK_QUESTION;
+				++out->nchunks;
+			} else {
+				/* Parse input prompt */
+				contentlen = strip(tag.content, tag.contentlen, &content);
+
+				inprompt_t *prompt = malloc(sizeof(inprompt_t));
+				if (!prompt)
+					return 1;
+
+				prompt->text = malloc(contentlen + 1);
+				if (!prompt->text) {
+					free(prompt);
+					return 1;
+				}
+				strncpy(prompt->text, content, contentlen);
+				prompt->text[contentlen] = '\0';
+
+				out->chunks[out->nchunks].content = prompt;
+				out->chunks[out->nchunks].type = CHUNK_INPROMPT;
+				++out->nchunks;
+			}
 			break;
 		}
 
-		cur = t.e;
+		cur = tag.end;
 	}
-	free(bare);
-	free_tag(&s);
-	free_tag(&t);
-
-	out->nchunks = n;
 
 	/* Testing */
 	printf("pout:\n");
-	printf("\tchunkarrsize: %lu\n", out->chunkarrsize);
-	printf("\tchunksize: %lu\n", out->chunksize);
+	printf("\tcapchunks: %lu\n", out->capchunks);
 	printf("\tnchunks: %lu\n", out->nchunks);
-	printf("\tres:\n");
 	for (int i = 0; i < out->nchunks; ++i) {
-		printf("\t\ttext: %s\n", out->res[i].text);
-		printf("\t\tlatex: %s\n", out->res[i].latex);
+		if (out->chunks[i].type == CHUNK_MSG) {
+			printf("\tmsg:\n");
+			msg_t *m = ((msg_t *)out->chunks[i].content);
+			printf("\t\ttext: %s\n", m->text);
+		} else if (out->chunks[i].type == CHUNK_INPROMPT) {
+			printf("\tprompt:\n");
+			inprompt_t *p = ((inprompt_t *)out->chunks[i].content);
+			printf("\t\ttext: %s\n", p->text);
+		} else if (out->chunks[i].type == CHUNK_RESULT) {
+			printf("\tresult:\n");
+			result_t *r = ((result_t *)out->chunks[i].content);
+			printf("\t\ttext: %s\n", r->text);
+			printf("\t\tlatex: %s\n", r->latex);
+		}
 	}
-	printf("\tlog: %s\n", out->log);
-	printf("\tnewprompt: %s\n", out->newprompt);
-	printf("\tquestion: %i\n", out->question);
-	printf("\terr: %i\n", out->err);
-	if (out->err)
-		printf("\terrmsg: %s\n", out->errmsg);
 	printf("\n");
 
-	return out;
-}
-void free_maxima_out(maxout *o)
-{
-	free(o->errmsg);
-	free(o->newprompt);
-	free(o->log);
-	for (int i = 0; i < o->chunkarrsize; ++i) {
-		free(o->res[i].latex);
-		free(o->res[i].text);
-	}
-	free(o->res);
-	free(o);
+	return 0;
 }
 
-int escape_special_chars(const char *text, char **o)
+int get_closing_prompt(const maxout_t *o, char **prompt, size_t *promptsize, prompttype_t *type)
+{
+	if (o->nchunks == 0)
+		return 1;
+
+	chunk_t chunk = o->chunks[o->nchunks - 1];
+	char *text;
+	if (chunk.type == CHUNK_INPROMPT) {
+		inprompt_t *p = chunk.content;
+		text = p->text;
+		*type = PROMPT_INPUT;
+	} else if (chunk.type == CHUNK_QUESTION) {
+		question_t *q = chunk.content;
+		text = q->text;
+		*type = PROMPT_QUESTION;
+	} else {
+		return 2;
+	}
+
+	int newpromptsize = strlen(text) + 1;
+	if (newpromptsize > *promptsize) {
+		*promptsize = newpromptsize;
+		char *p = realloc(*prompt, *promptsize);
+		if (!*p)
+			return 3;
+		*prompt = p;
+	}
+	strcpy(*prompt, text);
+	return 0;
+}
+int set_answer(maxout_t *o, const char *answer)
+{
+	if (o->nchunks == 0 || o->chunks[o->nchunks - 1].type != CHUNK_QUESTION)
+		return 1;
+
+	char *ans;
+	size_t n = strip(answer, strlen(answer), &ans);
+
+	question_t *q = o->chunks[o->nchunks - 1].content;
+	q->answer = malloc(n + 1);
+	if (!q->answer)
+		return 2;
+	strncpy(q->answer, ans, n);
+	return 0;
+}
+
+static int escape_special_tex_chars(const char *text, char **esctext)
 {
 	const char chars[] = "&%$#_{}~^\\";
 	const char escchars[][17] = {
@@ -361,36 +475,36 @@ int escape_special_chars(const char *text, char **o)
 	};
 
 	int i = 0;
-	char *e = (char *)(text + strlen(text));
+	char *end = (char *)(text + strlen(text));
 	int repl = 0;
-	for (char *c = (char *)text; c < e; ++c) {
+	for (char *cur = (char *)text; cur < end; ++cur) {
 		repl = 0;
 		for (int j = 0; j < LENGTH(chars) - 1; ++j) {
-			if (*c == chars[j]) {
+			if (*cur == chars[j]) {
 				int n = strlen(escchars[j]);
-				if (o)
-					strncpy(*o + i, escchars[j], n);
+				if (esctext)
+					strncpy(*esctext + i, escchars[j], n);
 				i += n;
 				repl = 1;
 			}
 		}
 
 		if (!repl) {
-			if (o)
-				(*o)[i] = *c;
+			if (esctext)
+				(*esctext)[i] = *cur;
 			++i;
 		}
 	}
-	if (o)
-		(*o)[i] = '\0';
+	if (esctext)
+		(*esctext)[i] = '\0';
 	return i;
 }
-void extract_plot_file(const char *restext, char **path)
+static void extract_plot_file(const char *restext, char **path)
 {
 	char *c1 = strchr(restext, ',');
 	char *c2 = strchr(restext, ']');
 
-	int n = c2 - c1 - 1;
+	size_t n = c2 - c1 - 1;
 	char *s = c1 + 1;
 	n = strip(s, n, &s);
 	++s;
@@ -399,98 +513,139 @@ void extract_plot_file(const char *restext, char **path)
 	strncpy(*path, s, n);
 	(*path)[n] = '\0';
 }
-int create_latex_doc(const char *path, const char *respath)
+static void write_eplot_latex(FILE *fout, const maxout_t *out)
+{
+	for (int i = 0; i < out->nchunks - 1; ++i) {
+		if (out->chunks[i].type == CHUNK_MSG) {
+			msg_t *msg = out->chunks[i].content;
+			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
+			fwrite(msg->text, 1, strlen(msg->text), fout);
+			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
+		} else if (out->chunks[i].type == CHUNK_RESULT) {
+			result_t *res = out->chunks[i].content;
+			char *plotpath = malloc(strlen(res->text)); /* Is at least 1 char smaller than res->text */
+			extract_plot_file(res->text, &plotpath);
+
+			fwrite(latex_plot_env[0], 1, strlen(latex_plot_env[0]), fout);
+			fwrite(plotpath, 1, strlen(plotpath), fout);
+			fwrite(latex_plot_env[1], 1, strlen(latex_plot_env[1]), fout);
+			free(plotpath);
+		} else if (out->chunks[i].type == CHUNK_QUESTION) {
+			question_t *question = out->chunks[i].content;
+			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
+			fwrite(question->text, 1, strlen(question->text), fout);
+			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
+		}
+	}
+}
+static void write_math_latex(FILE *fout, const maxout_t *out)
+{
+	for (int i = 0; i < out->nchunks - 1; ++i) {
+		if (out->chunks[i].type == CHUNK_MSG) {
+			msg_t *msg = out->chunks[i].content;
+			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
+			fwrite(msg->text, 1, strlen(msg->text), fout);
+			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
+		} else if (out->chunks[i].type == CHUNK_RESULT) {
+			result_t *res = out->chunks[i].content;
+			fwrite(latex_math_env[0], 1, strlen(latex_math_env[0]), fout);
+			fwrite(res->latex, 1, strlen(res->latex), fout);
+			fwrite(latex_math_env[1], 1, strlen(latex_math_env[1]), fout);
+		} else if (out->chunks[i].type == CHUNK_QUESTION) {
+			question_t *question = out->chunks[i].content;
+			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
+			fwrite(question->text, 1, strlen(question->text), fout);
+			fputc(' ', fout);
+			fwrite(question->answer, 1, strlen(question->answer), fout);
+			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
+		}
+	}
+}
+int create_latex_doc(const char *path, const char *relrespath)
 {
 	FILE *fdoc = fopen(path, "w");
-	if (!fdoc) {
-		fclose(fdoc);
+	if (!fdoc)
 		return 1;
-	}
 
 	fwrite(latex_doc_env[0], 1, strlen(latex_doc_env[0]), fdoc);
 	fwrite(latex_include_res_env[0], 1, strlen(latex_include_res_env[0]), fdoc);
-	fwrite(respath, 1, strlen(respath), fdoc);
+	fwrite(relrespath, 1, strlen(relrespath), fdoc);
 	fwrite(latex_include_res_env[1], 1, strlen(latex_include_res_env[1]), fdoc);
 	fwrite(latex_doc_env[1], 1, strlen(latex_doc_env[1]), fdoc);
 
 	fclose(fdoc);
 	return 0;
 }
-int write_latex_res(const char *path, const maxout *const pout,
-		const char *cmd, const char *prompt, const cmdtype_t cmdtype)
+int write_latex(const char *path, const maxout_t *out,
+		const char *prompt, const char *cmd, cmdtype_t cmdtype)
 {
-	if (pout->nchunks == 0)
-		return 0;
-
-	FILE *fres = fopen(path, "a");
-	if (!fres)
+	if (out->nchunks == 0 || out->chunks[out->nchunks - 1].type != CHUNK_INPROMPT)
 		return 1;
 
-	int size = escape_special_chars(prompt, NULL);
-	char *pmttex = emalloc(size + 1);
-	escape_special_chars(prompt, &pmttex);
+	FILE *fout = fopen(path, "a");
+	if (!fout)
+		return 2;
 
-	fwrite(latex_prompt_env[0], 1, strlen(latex_prompt_env[0]), fres);
-	fwrite(pmttex, 1, strlen(pmttex), fres);
-	fwrite(latex_prompt_env[1], 1, strlen(latex_prompt_env[1]), fres);
+	int size = escape_special_tex_chars(prompt, NULL);
+	char *pmttex = emalloc(size + 1);
+	escape_special_tex_chars(prompt, &pmttex);
+
+	fwrite(latex_prompt_env[0], 1, strlen(latex_prompt_env[0]), fout);
+	fwrite(pmttex, 1, strlen(pmttex), fout);
+	fwrite(latex_prompt_env[1], 1, strlen(latex_prompt_env[1]), fout);
 	free(pmttex);
 
-	size = escape_special_chars(cmd, NULL);
+	size = escape_special_tex_chars(cmd, NULL);
 	char *cmdtex = emalloc(size + 1);
-	escape_special_chars(cmd, &cmdtex);
+	escape_special_tex_chars(cmd, &cmdtex);
 
-	fwrite(latex_cmd_env[0], 1, strlen(latex_cmd_env[0]), fres);
-	fwrite(cmdtex, 1, strlen(cmdtex), fres);
-	fwrite(latex_cmd_env[1], 1, strlen(latex_cmd_env[1]), fres);
+	fwrite(latex_cmd_env[0], 1, strlen(latex_cmd_env[0]), fout);
+	fwrite(cmdtex, 1, strlen(cmdtex), fout);
+	fwrite(latex_cmd_env[1], 1, strlen(latex_cmd_env[1]), fout);
 	free(cmdtex);
 
-	switch (cmdtype) {
-	case CMDTYPE_MATH: {
-		for (int i = 0; i < pout->nchunks; ++i) {
-			char *content = pout->res[i].latex;
-			fwrite(latex_math_env[0], 1, strlen(latex_math_env[0]), fres);
-			fwrite(content, 1, strlen(content), fres);
-			fwrite(latex_math_env[1], 1, strlen(latex_math_env[1]), fres);
-		}
-		break;
-	}
-	case CMDTYPE_EPLOT: {
-	   	for (int i = 0; i < pout->nchunks; ++i) {
-			char *text = pout->res[i].text;
-			char *plotpath = emalloc(strlen(text));
-			extract_plot_file(text, &plotpath);
-			fwrite(latex_plot_env[0], 1, strlen(latex_plot_env[0]), fres);
-			fwrite(plotpath, 1, strlen(plotpath), fres);
-			fwrite(latex_plot_env[1], 1, strlen(latex_plot_env[1]), fres);
-			free(plotpath);
-	   	}
-		break;
-	}
-	}
+	if (cmdtype == CMD_EPLOT)
+		write_eplot_latex(fout, out);
+	else if (cmdtype == CMD_BATCH)
+		write_math_latex(fout, out);
+	else if (cmdtype == CMD_MATH)
+		write_math_latex(fout, out);
 
-	fclose(fres);
+	fclose(fout);
 	return 0;
 }
-int write_log(const char *path, const maxout *const pout, const char *cmd, const char *prompt)
+int write_log(const char *path, const maxout_t *out, const char *prompt, const char *cmd)
 {
-	FILE *flog = NULL;
-	flog = fopen(path, "w+");
-	if (!flog)
+	if (out->nchunks == 0 || out->chunks[out->nchunks - 1].type != CHUNK_INPROMPT)
 		return 1;
+
+	FILE *flog = NULL;
+	flog = fopen(path, "a");
+	if (!flog)
+		return 2;
 
 	fwrite(prompt, 1, strlen(prompt), flog);
 	fwrite(cmd, 1, strlen(cmd), flog);
 	fputc('\n', flog);
-	fwrite(pout->log, 1, strlen(pout->log), flog);
-
+	for (int i = 0; i < out->nchunks - 1; ++i) {
+		if (out->chunks[i].type == CHUNK_MSG) {
+			msg_t *m = out->chunks[i].content;
+			fwrite(m->text, 1, strlen(m->text), flog);
+		} else if (out->chunks[i].type == CHUNK_INPROMPT) {
+			inprompt_t *r = out->chunks[i].content;
+			fwrite(r->text, 1, strlen(r->text), flog);
+		} else if (out->chunks[i].type == CHUNK_RESULT) {
+			result_t *r = out->chunks[i].content;
+			fwrite(r->text, 1, strlen(r->text), flog);
+		} else if (out->chunks[i].type == CHUNK_QUESTION) {
+			question_t *content = out->chunks[i].content;
+			fwrite(content->text, 1, strlen(content->text), flog);
+			fputc(' ', flog);
+			fwrite(content->answer, 1, strlen(content->answer), flog);
+		}
+		fputc('\n', flog);
+	}
+	fputc('\n', flog);
 	fclose(flog);
-
-	/* Testing */
-	// fwrite(prompt, 1, strlen(prompt), stdout);
-	// fwrite(cmd, 1, strlen(cmd), stdout);
-	// fputc('\n', stdout);
-	// fwrite(pout->log, 1, strlen(pout->log), stdout);
-	// fflush(stdout);
-
 	return 0;
 }
