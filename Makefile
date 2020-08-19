@@ -10,9 +10,9 @@ include config.mk
 first: target
 
 target: objdir main.o parse.o write.o str.o util.o
-	$(CC) -o vimax obj/main.o obj/parse.o obj/write.o obj/str.o obj/util.o $(LDFLAGS)
+	$(CC) -o texmax obj/main.o obj/parse.o obj/write.o obj/str.o obj/util.o $(LDFLAGS)
 clean:
-	rm -f vimax
+	rm -f texmax
 	rm -f test/testparse
 	rm -f test/teststr
 	rm -rf obj
