@@ -401,7 +401,7 @@ static void mainloop()
 			err = 0;
 			quit = 1;
 		} else {
-			printf("vimax command `%s' not recognized\n", action);
+			printf("texmax command `%s' not recognized\n", action);
 		}
 
 		if (npipe_write_err(err))

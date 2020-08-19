@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-static const char *cache_dir = ".vimax";
+static const char *cache_dir = ".texmax";
 static const char *fifo_name = "cmd";
 static const char *latex_doc_name = "doc.tex";
 static const char *latex_res_name = "res.tex";
