@@ -5,6 +5,10 @@
 
 #define LENGTH(X) (sizeof(X) / sizeof((X)[0]))
 
+#define BUG() do { \
+	die(1, "BUG: failure at %s:%d/%s()!\n", __FILE__, __LINE__, __func__); \
+	} while(0)
+
 void *emalloc(size_t size);
 void *erealloc(void *ptr, size_t size);
 void die(int err, const char *fmt, ...);

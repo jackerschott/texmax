@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h> 
+#include <poll.h>
 #include <regex.h>
 #include <signal.h>
 #include <stdio.h>
@@ -8,14 +9,16 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "config.h"
 #include "parse.h"
-#include "util.h"
 #include "str.h"
+#include "util.h"
+#include "write.h"
 
-#define BUFSIZE_OUT 16384
+#define READSIZE_OUT 16384
 #define BUFSIZE_IN 512
 
 #define BUFSIZE_ANS 16
@@ -29,91 +32,211 @@ static pid_t maxpid;
 static int fmaxcmd;
 static int fmaxout;
 
-static char *outbuf;
-static size_t outlen;
-static size_t outsize;
+static char *outstr;
+static size_t outstrlen;
+static size_t outstrsize;
 
-static char *cmdprompt;
-static size_t cmdpromptsize;
-static char *pcmd;
-static size_t pcmdsize;
+static char *inprompt;
+static size_t inpromptsize;
+static char *parsedcmd;
+static size_t parsedcmdsize;
 
-static int maxerr;
-
-static size_t read_single_maxima_out(char *outbuf, size_t *outsize)
+static pid_t start_process(const char *file, char *const argv[], int fd[2])
 {
-	// TODO: Read all output until maybe either prompt or timeout
+	// TODO: error handling
 
-	size_t outlen = 0;
+	int pipein[2];
+	int pipeout[2];
 
+	if (pipe(pipein))
+		die(-2, "pipe:");
+	if (pipe(pipeout))
+		die(-2, "pipe:");
+	pid_t pid = fork();
+	if (pid == -1) {
+		die(-2, "fork:");
+	} else if (pid == 0) {
+		close(pipein[1]);
+		close(pipeout[0]);
+
+		dup2(pipein[0], STDIN_FILENO);
+		dup2(pipeout[1], STDOUT_FILENO);
+		close(pipein[0]);
+		close(pipeout[1]);
+
+		execvp(file, argv);
+		die(-2, "execvp: could not execute `%s':", file);
+	} else {
+		close(pipein[0]);
+		close(pipeout[1]);
+
+		fd[0] = pipeout[0];
+		fd[1] = pipein[1];
+	}
+
+	return pid;
+}
+
+static void get_answer(const char* question, char **answer, size_t *answersize)
+{
+	char *const qst = emalloc(strlen(question) + 1);
+	strcpy(qst, question);
+	char *const argv[] = { "dmenu", "-p", qst, NULL };
+
+	int p[2];
+	pid_t pid = start_process("dmenu", argv, p);
+	close(p[1]);
+	waitpid(pid, NULL, 0);
+	free(qst);
+
+	char *ans = malloc(*answersize);
+	size_t anssize = *answersize;
+
+	size_t len = 0;
+	size_t remsize = anssize;
 	size_t readlen;
-	size_t readsize = *outsize;
-	size_t readoff = 0;
-	while ((readlen = read(fmaxout, outbuf + readoff, readsize)) == readsize) {
-		outlen += readlen;
-		*outsize += readsize;
-		outbuf = erealloc(outbuf, *outsize);
+	while ((readlen = read(p[0], ans + len, remsize)) == remsize) {
+		len += remsize;
+		remsize = anssize;
+		ans = erealloc(ans, len + remsize);
+	}
+	if (readlen == -1)
+		die(-2, "get_answer:");
+	else if (readlen == 0)
+		die(-2, "Unexpected EOF encountered");
 
-		readoff += readlen;
+	len += readlen;
+
+	// TODO: Does not strip '   positive   '
+	// TODO: Problem with 'positive;' and probably other invalid answers
+
+	len = strip(ans, len, &ans);
+	if (len + 2 > *answersize) {
+		*answersize = len + 2;
+		*answer = realloc(*answer, *answersize);
 	}
-	outlen += readlen;
-	outbuf[outlen] = '\0';
-	return outlen;
-}
-static size_t read_maxima_out(char *outbuf, size_t *outsize)
-{
-	char *buf = outbuf;
-	size_t size = *outsize;
-	size_t singlelen = read_single_maxima_out(buf, &size);
-	size_t len = singlelen;
-	while (!raw_out_has_prompt(buf)) {
-		buf += len;
-		size -= len;
-		singlelen = read_maxima_out(buf, &size);
-		len += singlelen;
-	}
-	*outsize = size;
-	return len;
-}
-static void get_answer(char* question, char **ans)
-{
-	const char* _ans = "yes";
-	strcpy(*ans, _ans);
+	strncpy(*answer, ans, len);
+	(*answer)[len] = ';';
+	(*answer)[len + 1] = '\0';
 }
 
 static void send_maxima_cmd(const char *cmd)
 {
-	write(fmaxcmd, pcmd, strlen(pcmd));
+	write(fmaxcmd, parsedcmd, strlen(parsedcmd));
 }
-static int process_continuous_maxima_out(const int cmdtype, const char *cmd, int *question)
+static size_t read_maxima_out(char **buf, size_t *size)
 {
-	outlen = read_maxima_out(outbuf, &outsize);
+	size_t len = 0;
+	size_t remsize = *size;
+	struct pollfd pfdin = { .fd = fmaxout, .events = POLLIN };
+	do {
+		int res = poll(&pfdin, 1, 100);
+		if (res == -1) {
+			die(-2, "poll:");
+		} else if (!res) {
+			die(1, "maxima timed out before delivering new input prompt");
+		}
 
-	maxout *pout = parse_maxima_out(outbuf, outlen, cmdtype);
-	if (write_latex_res(latex_res_path, pout, pcmd, cmdprompt, cmdtype)) {
-		die("Could not write to `%s'", latex_res_path);
-	}
-	if (write_log(log_path, pout, cmd, cmdprompt)) {
-		die("Could not write to `%s'", log_path);
-	}
+		size_t readlen = read(fmaxout, *buf + len, remsize);
+		if (readlen == -1) {
+			die(-2, "read_maxima_out:");
+		} else if (readlen == 0) {
+			die(-2, "unexpected EOF encountered");
+		} else if (readlen == remsize) {
+			len += remsize;
+			remsize = READSIZE_OUT;
+			*buf = erealloc(*buf, len + remsize);
+			continue;
+		}
 
-	get_closing_prompt(pout, cmdprompt, &cmdpromptsize);
-	*question = has_closing_question(pout);
-	int err = get_error(pout);
-	free_maxima_out(pout);
+		len += readlen;
+		remsize -= readlen;
+		/* No segfault because before decrement remsize > readlen holds.
+		   This is necessary for prompt check */
+		(*buf)[len] = '\0';
+	} while (!has_prompt(*buf));
 
-	return err;
+	*size = len + remsize;
+	return len;
 }
-static int process_maxima_out(const int cmdtype, const char *cmd)
+static void process_maxima_out(const int cmdtype, const char *cmd)
 {
-	char *ans = malloc(BUFSIZE_ANS);
-	int err, question;
-	while (!(err = process_continuous_maxima_out(cmdtype, cmd, &question)) && question) {
-		get_answer(cmdprompt, &ans);
+	maxout_t *out = alloc_maxima_out();
+	if (!out)
+		die(-1, "alloc_maxima_out:");
+
+	size_t promptsize = inpromptsize;
+	char *prompt = malloc(promptsize);
+	prompttype_t prompttype;
+	int err;
+
+	/* Parse first output */
+	outstrlen = read_maxima_out(&outstr, &outstrsize);
+
+	err = parse_maxima_out(out, outstr, outstrlen);
+	if (err)
+		die(-1, "parse_maxima_out:");
+
+	err = get_closing_prompt(out, &prompt, &promptsize, &prompttype);
+	if (err == 1 || err == 2)
+		die(1, "get_closing_prompt: no prompt in maxima output");
+	else if (err)
+		die(-1, "get_closing_prompt:");
+
+	/* Write answers to maxima and parse additional output, as long as closing prompt is a question */
+	size_t anssize = BUFSIZE_ANS;
+	char *ans = emalloc(anssize);
+	while (prompttype == PROMPT_QUESTION) {
+		get_answer(prompt, &ans, &anssize);
 		write(fmaxcmd, ans, strlen(ans));
+		err = set_answer(out, ans);
+		if (err == 1)
+			die(2, "set_answer: no question to answer");
+		else if (err)
+			die(-1, "set_answer:");
+
+		outstrlen = read_maxima_out(&outstr, &outstrsize);
+
+		err = parse_maxima_out(out, outstr, outstrlen);
+		if (err)
+			die(-1, "parse_maxima_out:");
+
+		err = get_closing_prompt(out, &prompt, &promptsize, &prompttype);
+		if (err == 1 || err == 2)
+			die(1, "get_closing_prompt: no prompt in maxima output");
+		else if (err)
+			die(-1, "get_closing_prompt:");
 	}
+
+	/* Write output to files */
+	err = write_latex(latex_res_path, out, inprompt, cmd, cmdtype);
+	if (err == 1)
+		die(3, "write_latex: invalid maxima output");
+	else if (err == 2)
+		die(-2, "write_latex: could not write to `%s':", latex_res_path);
+	else if (err)
+		die(-1, "write_latex:");
+
+	err = write_log(log_path, out, inprompt, parsedcmd);
+	if (err == 1)
+		die(3, "write_log: invalid maxima output");
+	else if (err)
+		die(-2, "write_log: could not write to `%s':", log_path);
+
+	/* Update input prompt string */
+	if (promptsize > inpromptsize) {
+		inpromptsize = promptsize;
+		char *p = realloc(inprompt, promptsize);
+		if (!p)
+			die(-1, "realloc:");
+		inprompt = p;
+	}
+	strcpy(inprompt, prompt);
+
 	free(ans);
-	return err;
+	free(prompt);
+
+	free_maxima_out(out);
 }
 
 static void start_maxima()
@@ -125,7 +248,7 @@ static void start_maxima()
 	pipe(linkout);
 	pid_t pid = fork();
 	if (pid == -1) {
-		die("Could not fork\n");
+		die(-2, "Could not fork\n");
 	} else if (pid == 0) {
 		/* maxima session */
 		close(linkcmd[1]);
@@ -136,11 +259,11 @@ static void start_maxima()
 		close(linkcmd[0]);
 		close(linkout[1]);
 
-		execl("/usr/bin/maxima", "maxima",
+		execl("/usr/bin/maxima", "/usr/bin/maxima",
 				"--quiet", "--init-lisp=init.lisp", NULL);
-		exit(0);
+		die(-2, "execl: could not start maxima:");
 	} else {
-		/* front session */
+		/* parent */
 		close(linkcmd[0]);
 		close(linkout[1]);
 
@@ -151,16 +274,11 @@ static void start_maxima()
 }
 static void stop_maxima()
 {
-	// TODO: Does not work, why?
-	char c = EOF;
-	write(fmaxcmd, &c, 1);
-
-	int res;
-	while ((res = kill(maxpid, 0)) != -1)
-		printf("killres: %i\n", res);
-
-	close(fmaxcmd);
 	close(fmaxout);
+	close(fmaxcmd);
+
+	if (waitpid(maxpid, NULL, 0) == -1)
+		die(-2, "waitpid:");
 }
 void split_cmd(char* cmd, char *action, char *arg)
 {
@@ -180,47 +298,53 @@ void split_cmd(char* cmd, char *action, char *arg)
 		strcpy(arg, d + 1);
 	}
 }
-static void handle_com(const char *arg)
+static int handle_com(const char *arg)
 {
-	cmdtype_t cmdtype = preparse_cmd(arg, pcmd, &pcmdsize);
-	if (cmdtype == CMDTYPE_INVALID) {
-		printf("Invalid maxima command");
-		maxerr = 1;
-		return;
+	if (!is_valid(arg)) {
+		printf("invalid maxima command\n");
+		return 1;
 	}
-
-	send_maxima_cmd(pcmd);
-	maxerr = process_maxima_out(cmdtype, arg);
+	cmdtype_t cmdtype = preparse_cmd(arg, &parsedcmd, &parsedcmdsize);
+	send_maxima_cmd(parsedcmd);
+	process_maxima_out(cmdtype, arg);
+	return 0;
 }
-static void handle_bat(const char *arg)
+static int handle_bat(const char *arg)
 {
 	FILE *fbat = fopen(arg, "r");
 	if (!fbat) {
-		printf("Could not open batch file `%s'\n", arg);
-		return;
+		printf("could not open batch file `%s'\n", arg);
+		return 1;
 	}
 
-	int len;
+	ssize_t len;
 	size_t size;
 	char *line = emalloc(BUFSIZE_IN);
-	int n;
-	char *s;
-	while (!maxerr && (len = getline(&line, &size, fbat)) != EOF) {
-		n = strip(line, len, &s);
+	int retval = 0;
+	while ((len = getline(&line, &size, fbat)) != EOF) {
+		char *s;
+		int n = strip(line, len, &s);
 		s[n] = '\0';
 
-		cmdtype_t cmdtype = preparse_cmd(s, pcmd, &pcmdsize);
-		send_maxima_cmd(pcmd);
-		maxerr = process_maxima_out(cmdtype, s);
+		if (!is_valid(s)) {
+			printf("invalid maxima command\n");
+			retval = 1;
+			break;
+		}
+		cmdtype_t cmdtype = preparse_cmd(s, &parsedcmd, &parsedcmdsize);
+		send_maxima_cmd(parsedcmd);
+		process_maxima_out(cmdtype, s);
 	}
 	free(line);
 
 	fclose(fbat);
+	return retval;
 }
-static void handle_rst(const char *arg)
+static int handle_rst(const char *arg)
 {
 	stop_maxima();
 	start_maxima();
+	return 0;
 }
 
 static int npipe_read_in(char *action, char *arg)
@@ -229,11 +353,10 @@ static int npipe_read_in(char *action, char *arg)
 	if (fpipe < 0)
 		return 1;
 
-	/* Just for testing */
-	//strcpy(inbuf, "com\nx:1;");
-
 	char *inbuf = emalloc(BUFSIZE_IN);
 	size_t inlen = read(fpipe, inbuf, BUFSIZE_IN);
+	if (inlen == -1)
+		return 1;
 	inbuf[inlen] = '\0';
 
 	split_cmd(inbuf, action, arg);
@@ -251,30 +374,82 @@ static int npipe_write_err(int err)
 
 	char serr[4];
 	sprintf(serr, "%i", err);
-	write(fpipe, serr, strlen(serr));
+	if (write(fpipe, serr, strlen(serr)) < 0)
+		return 1;
 
 	if (close(fpipe) < 0)
 		return 1;
 	return 0;
 }
-static int mainloop()
+static void mainloop()
 {
-	outsize = BUFSIZE_OUT;
-	outbuf = emalloc(outsize);
+	char *action = emalloc(BUFSIZE_IN);
+	char *arg = emalloc(BUFSIZE_IN);
+	int err;
+	int quit = 0;
+	while (!quit) {
+		if (npipe_read_in(action, arg))
+			die(-2, "npipe_read_in:");
 
-	pcmdsize = BUFSIZE_IN;
-	pcmd = emalloc(pcmdsize);
-	pcmd[0] = '\0';
+		if (strcmp(action, "com") == 0) {
+			err = handle_com(arg);
+		} else if (strcmp(action, "bat") == 0) {
+			err = handle_bat(arg);
+		} else if (strcmp(action, "rst") == 0) {
+			err = handle_rst(arg);
+		} else if (strcmp(action, "end") == 0) {
+			err = 0;
+			quit = 1;
+		} else {
+			printf("vimax command `%s' not recognized\n", action);
+		}
 
-	outlen = read_maxima_out(outbuf, &outsize);
+		if (npipe_write_err(err))
+			die(-2, "npipe_write_err:");
+	}
+	free(arg);
+	free(action);
+}
+int main(int argc, char* argv[])
+{
+	/* start maxima */
+	int p[2];
+	start_process("maxima", maxima_args, p);
+	fmaxcmd = p[1];
+	fmaxout = p[0];
 
-	cmdpromptsize = outlen + 1;
-	cmdprompt = emalloc(cmdpromptsize);
+	/* read initial output */
+	parsedcmdsize = BUFSIZE_IN;
+	parsedcmd = emalloc(parsedcmdsize);
+	parsedcmd[0] = '\0';
 
-	maxout *pout = parse_maxima_out(outbuf, outlen, CMDTYPE_MATH);
-	get_closing_prompt(pout, cmdprompt, &cmdpromptsize);
-	free_maxima_out(pout);
+	outstrsize = READSIZE_OUT;
+	outstr = emalloc(outstrsize);
+	outstrlen = read_maxima_out(&outstr, &outstrsize);
 
+	/* extract initial prompt */
+	inpromptsize = outstrlen + 1;
+	inprompt = emalloc(inpromptsize);
+
+	maxout_t *out = alloc_maxima_out();
+	if (!out)
+		die(-1, "alloc_maxima_out:");
+
+	int err = parse_maxima_out(out, outstr, outstrlen);
+	if (err)
+		die(-1, "parse_maxima_out:");
+
+	prompttype_t pmttype;
+	err = get_closing_prompt(out, &inprompt, &inpromptsize, &pmttype);
+	if (err == 1)
+		die(1, "get_closing_prompt: no output");
+	else if (err == 2)
+		die(1, "get_closing_prompt: no prompt in output");
+	else if (err == 3)
+		die(-1, "get_closing_prompt:");
+	free_maxima_out(out);
+
+	/* create input/output files */
 	int cdirlen = strlen(cache_dir);
 	fifo_path = emalloc(cdirlen + strlen(fifo_name) + 2);
 	pathcat(cache_dir, fifo_name, &fifo_path);
@@ -291,67 +466,33 @@ static int mainloop()
 	struct stat sb;
 	if (stat(cache_dir, &sb) || !S_ISDIR(sb.st_mode)) {
 		if (mkdir(cache_dir, 0755) < 0)
-			die("Could not create `%s'\n", cache_dir);
+			die(-2, "Could not create `%s'\n", cache_dir);
 	}
 	if (create_latex_doc(latex_doc_path, latex_res_name)) {
-		die("Could not create `%s'", latex_doc_path);
+		die(-2, "Could not create `%s'", latex_doc_path);
 	}
 
 	if (stat(fifo_path, &sb) || !S_ISFIFO(sb.st_mode)) {
 		if (mkfifo(fifo_path, 0644) < 0)
-			die("Could not create `%s'\n", fifo_name);
+			die(-2, "Could not create `%s'\n", fifo_name);
 	}
 
-	char *action = emalloc(BUFSIZE_IN);
-	char *arg = emalloc(BUFSIZE_IN);
-	while (1) {
-		if (npipe_read_in(action, arg)) {
-			fprintf(stderr, "Could not read input\n");
-			exit(1);
-		}
+	/* start accepting commands */
+	mainloop();
 
-		//printf("action: %s\n", action);
-		//printf("arg:\n%s\n", arg);
-		
-		if (strcmp(action, "com") == 0) {
-			handle_com(arg);
-		} else if (strcmp(action, "bat") == 0) {
-			handle_bat(arg);
-		} else if (strcmp(action, "rst") == 0) {
-			handle_rst(arg);
-		} else {
-			printf("Action `%s' not recognized\n", action);
-		}
-
-		/* Just for testing */
-		// exit(0);
-
-		if (npipe_write_err(maxerr)) {
-			fprintf(stderr, "Could not write result\n");
-			exit(1);
-		}
-	}
-
+	/* cleanup */
 	if (!stat(fifo_path, &sb) && S_ISFIFO(sb.st_mode)) {
 		if (unlink(fifo_path))
-			die("Could not remove `%s'\n", fifo_path);
+			die(-2, "Could not remove `%s'\n", fifo_path);
 	}
-
-	free(arg);
-	free(action);
 
 	free(log_path);
 	free(latex_res_path);
 	free(latex_doc_path);
 	free(fifo_path);
 
-	free(cmdprompt);
-	free(pcmd);
-	free(outbuf);
-}
-int main(int argc, char* argv[])
-{
-	start_maxima();
-	mainloop();
+	free(inprompt);
+	free(parsedcmd);
+	free(outstr);
 	return 0;
 }

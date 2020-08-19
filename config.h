@@ -12,47 +12,50 @@ static const char *log_name = "max.log";
 static char *const maxima_args[] = {
 	"maxima",
 	"--quiet",
-	"--init-lisp=init.lisp",
+	"--init=init",
 	NULL,
 };
 
-static const char *latex_doc_env[] = {
-	"\\documentclass{minimal}\n" \
+static const char *latex_preambel = \
+	"\\documentclass[preview,border=5bp,fleqn]{standalone}\n" \
+	"\\usepackage{amsmath}\n"
 	"\\usepackage{graphicx}\n" \
 	"\\setlength\\parindent{0pt}\n" \
+	"\\setlength\\mathindent{0pt}\n";
+static const char *latex_doc_env[] = {
 	"\\begin{document}\n",
-	"\\end{document}"
+	"\\end{document}\n"
 };
 static const char *latex_include_res_env[] = {
 	"\\input{", "}\n"
 };
-static const char *latex_prompt_env[] = {
-	"\\begin{samepage}\n" \
-	"\\texttt{", "} "
+static const char *latex_doc_end = "\\vspace{\\baselineskip}\n";
+static const char *latex_samepage_env[] = {
+	"\\begin{samepage}\n",
+	"\\end{samepage}\n"
 };
+static const char *latex_prompt_env[] = {
+	"\\mbox{\\tt ", "\\black}"
+};
+static const char *latex_align_sep = "& ";
 static const char *latex_cmd_env[] = {
-	"\\texttt{", "} \\\\\n"
+	"\\mbox{\\tt ", "}"
 };
 
-static const char *latex_text_env[] = {
-	"\\texttt{", "} \\\\\n"
-};
 static const char *latex_math_env[] = {
-	"\\begin{flalign}\n",
-	"\n\\end{flalign}\n" \
-	"\\end{samepage}\n" \
-	"\\bigskip\n\n"
+	"\\begin{align*}\n",
+	"\\end{align*}\n"
 };
+static const char *latex_math_sep = " \\\\\n";
+static const char *latex_text_env[] = {
+	"\\texttt{", "}"
+};
+static const char *latex_text_sep = " \\\\\n";
 static const char *latex_plot_env[] = {
-	"\\includegraphics[width=0.8\\textwidth]{", "}\n" \
-	"\\end{samepage}\n" \
-	"\\bigskip\n\n"
+	"\\includegraphics[width=0.8\\textwidth]{", "}"
 };
-static const char *latex_err_env[] = {
-	"\\texttt{", "}\n" \
-	"\\end{samepage}\n" \
-	"\\bigskip\n\n"
-};
+
+static const char *latex_cell_end = "\n";
 
 static const char *plot_embed_args[] = {
 	"[gnuplot_term, png]",
