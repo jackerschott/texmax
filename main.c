@@ -122,7 +122,7 @@ static void get_answer(const char* question, char **answer, size_t *answersize)
 
 static void send_maxima_cmd(const char *cmd)
 {
-	write(fmaxcmd, parsedcmd, strlen(parsedcmd));
+	write(fmaxcmd, cmd, strlen(cmd));
 }
 static size_t read_maxima_out(char **buf, size_t *size)
 {
@@ -414,7 +414,7 @@ int main(int argc, char* argv[])
 {
 	/* start maxima */
 	int p[2];
-	start_process("maxima", maxima_args, p);
+	maxpid = start_process("maxima", maxima_args, p);
 	fmaxcmd = p[1];
 	fmaxout = p[0];
 
