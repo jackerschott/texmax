@@ -386,8 +386,7 @@ static void mainloop()
 	char *action = emalloc(BUFSIZE_IN);
 	char *arg = emalloc(BUFSIZE_IN);
 	int err;
-	int quit = 0;
-	while (!quit) {
+	while (1) {
 		if (npipe_read_in(action, arg))
 			die(-2, "npipe_read_in:");
 
@@ -398,8 +397,7 @@ static void mainloop()
 		} else if (strcmp(action, "rst") == 0) {
 			err = handle_rst(arg);
 		} else if (strcmp(action, "end") == 0) {
-			err = 0;
-			quit = 1;
+			break;
 		} else {
 			printf("texmax command `%s' not recognized\n", action);
 		}
