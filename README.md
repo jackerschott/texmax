@@ -52,30 +52,30 @@ can be consulted if something goes wrong with the LaTeX version.
 ### Integration in vim
 To integrate texmax in vim add something like the following to your vimrc
 ```vim
-    function! TexmaxExecLine()
-      let s:line = getline(".")
-      silent exec "!echo \"com\\n" . escape(getline("."), "%\"") . "\" > .texmax/cmd"
-      silent exec "!cat .texmax/cmd >/dev/null"
-      silent exec "!pdflatex -interaction nonstopmode -output-dir .texmax .texmax/doc.tex"
-    endfunction
+function! TexmaxExecLine()
+  let s:line = getline(".")
+  silent exec "!echo \"com\\n" . escape(getline("."), "%\"") . "\" > .texmax/cmd"
+  silent exec "!cat .texmax/cmd >/dev/null"
+  silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
+endfunction
 
-    function! TexmaxExecFile()
-      let s:line = getline(".")
-      silent exec "!echo \"bat\\n".@%."\" > .texmax/cmd"
-      silent exec "!cat .texmax/cmd >/dev/null"
-      silent exec "!pdflatex -interaction nonstopmode -output-dir .texmax .texmax/doc.tex"
-    endfunction
+function! TexmaxExecFile()
+  let s:line = getline(".")
+  silent exec "!echo \"bat\\n".@%."\" > .texmax/cmd"
+  silent exec "!cat .texmax/cmd >/dev/null"
+  silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
+endfunction
 
-    function! TexmaxRestart()
-        silent exec "!echo \"rst\" > .texmax/cmd"
-    endfunction
-
-    autocmd BufRead *.mac nnoremap <space> :call TexmaxExecLine()<cr>
-    autocmd BufRead *.mac nnoremap <enter> :call TexmaxExecFile()<cr>
-    autocmd BufRead *.mac nnoremap <leader>rs :call TexmaxRestart()<cr>
-    autocmd BufRead *.mac nnoremap <leader>v :!mimeo .texmax/doc.pdf<cr><cr>
-    autocmd BufRead *.mac nnoremap <leader>vr :split .texmax/res.tex<cr>
-    autocmd BufRead *.mac nnoremap <leader>vl :split .texmax/max.log<cr>
+autocmd BufRead *.mac command! TexmaxStart silent exec "!texmax &"
+autocmd BufRead *.mac command! TexmaxStop silent exec "!echo \"end\" > .texmax/cmd"
+autocmd BufRead *.mac command! TexmaxRestartMaxima silent exec "!echo \"rst\" > .texmax/cmd"
+autocmd BufRead *.mac nnoremap <space> :call TexmaxExecLine()<cr>
+autocmd BufRead *.mac nnoremap <enter> :call TexmaxExecFile()<cr>
+autocmd BufRead *.mac nnoremap <leader>v :!mimeo .tex/doc.pdf<cr><cr>
+autocmd BufRead *.mac nnoremap <leader>vd :split .texmax/doc.tex<cr>
+autocmd BufRead *.mac nnoremap <leader>vr :split .texmax/res.tex<cr>
+autocmd BufRead *.mac nnoremap <leader>vl :split .texmax/max.log<cr>
+autocmd BufUnload *.mac silent exec "!test -p .texmax/cmd && echo \"end\" > .texmax/cmd"
 ```
 
 ## Installation
@@ -91,7 +91,7 @@ To build texmax use
 
     $ make
 
-For installation and removal use
+For installation and deinstallation use
 
     # make install
 
