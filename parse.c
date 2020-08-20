@@ -137,26 +137,28 @@ cmdtype_t preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize)
 		func_to_str(&f, newfstr, NULL);
 		free_func(&f);
 
-		size_t newcmdsize = cmdlen + newfstrsize - (fend - fbeg);
-		if (newcmdsize > *pcmdsize) {
-			*pcmd = erealloc(*pcmd, newcmdsize);
-			*pcmdsize = newcmdsize;
+		size_t newpcmdsize = cmdlen + newfstrsize - (fend - fbeg) + 2;
+		if (newpcmdsize > *pcmdsize) {
+			*pcmd = erealloc(*pcmd, newpcmdsize);
+			*pcmdsize = newpcmdsize;
 		}
 
 		(*pcmd)[0] = '\0';
 		strncat(*pcmd, cmd, fbeg - cmd);
 		strcat(*pcmd, newfstr);
 		strcat(*pcmd, fend);
+		strcat(*pcmd, "\n");
 
 		return CMD_EPLOT;
 	}
 
-	size_t newcmdsize = cmdlen + 1;
+	size_t newcmdsize = cmdlen + 2;
 	if (newcmdsize > *pcmdsize) {
 		*pcmd = erealloc(*pcmd, newcmdsize);
 		*pcmdsize = newcmdsize;
 	}
 	strcpy(*pcmd, cmd);
+	strcat(*pcmd, "\n");
 
 	if (!check_func(cmd, "batch", NULL, NULL))
 		return CMD_BATCH;
