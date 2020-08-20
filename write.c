@@ -63,194 +63,22 @@ static void extract_plot_file(const char *restext, char **path)
 	strncpy(*path, s, n);
 	(*path)[n] = '\0';
 }
-static int write_eplot_latex(FILE *fout, const maxout_t *out)
-{
-	for (int i = 0; i < out->nchunks - 1; ++i) {
-		if (out->chunks[i].type == CHUNK_MSG) {
-			msg_t *msg = out->chunks[i].content;
 
-			int size = escape_special_tex_chars(msg->text, NULL);
-			char *text = malloc(size + 1);
-			if (!text)
-				return 1;
-			escape_special_tex_chars(msg->text, text);
-
-			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-			fwrite(text, 1, strlen(text), fout);
-			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-		} else if (out->chunks[i].type == CHUNK_RESULT) {
-			result_t *res = out->chunks[i].content;
-
-			char *plotpath = malloc(strlen(res->text)); /* Is at least 1 char smaller than res->text */
-			if (!plotpath)
-				return 1;
-			extract_plot_file(res->text, &plotpath);
-
-			fwrite(latex_plot_env[0], 1, strlen(latex_plot_env[0]), fout);
-			fwrite(plotpath, 1, strlen(plotpath), fout);
-			fwrite(latex_plot_env[1], 1, strlen(latex_plot_env[1]), fout);
-			free(plotpath);
-		} else if (out->chunks[i].type == CHUNK_QUESTION) {
-			question_t *question = out->chunks[i].content;
-
-			int size = escape_special_tex_chars(question->text, NULL);
-			char *text = malloc(size + 1);
-			if (!text)
-				return 1;
-			escape_special_tex_chars(question->text, text);
-
-			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-			fwrite(text, 1, strlen(text), fout);
-			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-		} else if (out->chunks[i].type == CHUNK_ERROR) {
-			error_t *err = out->chunks[i].content;
-
-			int size = escape_special_tex_chars(err->text, NULL);
-			char *text = malloc(size + 1);
-			if (!text)
-				return 1;
-			escape_special_tex_chars(err->text, text);
-
-			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-			fwrite(text, 1, strlen(text), fout);
-			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-			free(text);
-		}
-	}
-	return 0;
-}
-static int write_math_latex(FILE *fout, const maxout_t *out)
-{
-	for (int i = 0; i < out->nchunks - 1; ++i) {
-		int math = out->chunks[i].type == CHUNK_RESULT
-			&& ((result_t *)out->chunks[i].content)->latex;
-		if (!math)
-			fwrite(latex_math_env[1], 1, strlen(latex_math_env[1]), fout);
-
-		if (out->chunks[i].type == CHUNK_MSG) {
-			msg_t *msg = out->chunks[i].content;
-
-			int size = escape_special_tex_chars(msg->text, NULL);
-			char *text = malloc(size + 1);
-			if (!text)
-				return 1;
-			escape_special_tex_chars(msg->text, text);
-
-			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-			fwrite(text, 1, strlen(text), fout);
-			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-			free(text);
-		} else if (out->chunks[i].type == CHUNK_RESULT) {
-			result_t *res = out->chunks[i].content;
-
-			if (res->latex) {
-				fputs(latex_math_sep, fout);
-				fwrite(res->latex, 1, strlen(res->latex), fout);
-			} else {
-				int size = escape_special_tex_chars(res->text, NULL);
-				char *text = malloc(size + 1);
-				if (!text)
-					return 1;
-				escape_special_tex_chars(res->text, text);
-
-				fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-				fwrite(text, 1, strlen(text), fout);
-				fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-			}
-
-		} else if (out->chunks[i].type == CHUNK_QUESTION) {
-			question_t *question = out->chunks[i].content;
-
-			int size = escape_special_tex_chars(question->text, NULL);
-			char *text = malloc(size + 1);
-			if (!text)
-				return 1;
-			escape_special_tex_chars(question->text, text);
-
-			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-			fwrite(text, 1, strlen(text), fout);
-			fputc(' ', fout);
-			free(text);
-
-			size = escape_special_tex_chars(question->answer, NULL);
-			text = malloc(size + 1);
-			if (!text)
-				return 1;
-			escape_special_tex_chars(question->answer, text);
-
-			fwrite(text, 1, strlen(text), fout);
-			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-			free(text);
-		} else if (out->chunks[i].type == CHUNK_ERROR) {
-			error_t *err = out->chunks[i].content;
-
-			int size = escape_special_tex_chars(err->text, NULL);
-			char *text = malloc(size + 1);
-			if (!text)
-				return 1;
-			escape_special_tex_chars(err->text, text);
-
-			fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-			fwrite(text, 1, strlen(text), fout);
-			fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-			free(text);
-		}
-
-		if (!math)
-			fwrite(latex_math_env[0], 1, strlen(latex_math_env[0]), fout);
-	}
-	return 0;
-}
 static int write_latex_msg(FILE *fout, msg_t *msg)
 {
-	int size = escape_special_tex_chars(msg->text, NULL);
-	char *text = malloc(size + 1);
-	if (!text)
-		return 1;
-	escape_special_tex_chars(msg->text, text);
-
-	fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-	fwrite(text, 1, strlen(text), fout);
-	fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-	free(text);
+	fwrite(msg->text, 1, strlen(msg->text), fout);
 	return 0;
 }
 static int write_latex_question(FILE *fout, question_t *question)
 {
-	int size = escape_special_tex_chars(question->text, NULL);
-	char *text = malloc(size + 1);
-	if (!text)
-		return 1;
-	escape_special_tex_chars(question->text, text);
-
-	fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-	fwrite(text, 1, strlen(text), fout);
+	fwrite(question->text, 1, strlen(question->text), fout);
 	fputc(' ', fout);
-	free(text);
-
-	size = escape_special_tex_chars(question->answer, NULL);
-	text = malloc(size + 1);
-	if (!text)
-		return 1;
-	escape_special_tex_chars(question->answer, text);
-
-	fwrite(text, 1, strlen(text), fout);
-	fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-	free(text);
+	fwrite(question->answer, 1, strlen(question->answer), fout);
 	return 0;
 }
 static int write_latex_error(FILE *fout, error_t *err)
 {
-	int size = escape_special_tex_chars(err->text, NULL);
-	char *text = malloc(size + 1);
-	if (!text)
-		return 1;
-	escape_special_tex_chars(err->text, text);
-
-	fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
-	fwrite(text, 1, strlen(text), fout);
-	fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
-	free(text);
+	fwrite(err->text, 1, strlen(err->text), fout);
 	return 0;
 }
 static int write_latex_math(FILE *fout, result_t *res)
@@ -359,6 +187,7 @@ static int write_latex_math_out(FILE *fout, const maxout_t *out)
 				fputs(latex_math_sep, fout);
 			} else {
 				fputc('\n', fout);
+				fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
 				fwrite(latex_math_env[0], 1, strlen(latex_math_env[0]), fout);
 				mathenv = 1;
 			}
@@ -367,6 +196,7 @@ static int write_latex_math_out(FILE *fout, const maxout_t *out)
 			if (mathenv) {
 				fputc('\n', fout);
 				fwrite(latex_math_env[1], 1, strlen(latex_math_env[1]), fout);
+				fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
 				mathenv = 0;
 			} else {
 				fputs(latex_text_sep, fout);
@@ -387,6 +217,8 @@ static int write_latex_math_out(FILE *fout, const maxout_t *out)
 	fputc('\n', fout);
 	if (mathenv)
 		fwrite(latex_math_env[1], 1, strlen(latex_math_env[1]), fout);
+	else
+		fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
 
 	return 0;
 }
@@ -395,22 +227,42 @@ static int write_latex_eplot_out(FILE *fout, const maxout_t *out)
 	fputc('\n', fout);
 	fwrite(latex_math_env[1], 1, strlen(latex_math_env[1]), fout);
 
+	int textenv = 0;
 	int err = 0;
 	for (int i = 0; i < out->nchunks - 1; ++i) {
 		if (out->chunks[i].type == CHUNK_RESULT) {
+			if (textenv) {
+				fputc('\n', fout);
+				fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
+				textenv = 0;
+			}
+
 			err = write_latex_eplot(fout, out->chunks[i].content);
-		} else if (out->chunks[i].type == CHUNK_MSG) {
-			err = write_latex_msg(fout, out->chunks[i].content);
-		} else if (out->chunks[i].type == CHUNK_QUESTION) {
-			err = write_latex_question(fout, out->chunks[i].content);
-		} else if (out->chunks[i].type == CHUNK_ERROR) {
-			err = write_latex_error(fout, out->chunks[i].content);
+		} else {
+			if (textenv) {
+				fputs(latex_text_sep, fout);
+			} else {
+				fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
+				textenv = 1;
+			}
+
+			if (out->chunks[i].type == CHUNK_MSG) {
+				err = write_latex_msg(fout, out->chunks[i].content);
+			} else if (out->chunks[i].type == CHUNK_QUESTION) {
+				err = write_latex_question(fout, out->chunks[i].content);
+			} else if (out->chunks[i].type == CHUNK_ERROR) {
+				err = write_latex_error(fout, out->chunks[i].content);
+			}
 		}
-		fputc('\n', fout);
 
 		if (err)
 			return err;
 	}
+	if (textenv) {
+		fputc('\n', fout);
+		fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
+	}
+
 	return 0;
 }
 static int write_latex_batch_out(FILE *fout, const maxout_t *out)
@@ -423,6 +275,7 @@ static int write_latex_batch_out(FILE *fout, const maxout_t *out)
 				fputs(latex_math_sep, fout);
 			} else {
 				fputc('\n', fout);
+				fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
 				fwrite(latex_math_env[0], 1, strlen(latex_math_env[0]), fout);
 				mathenv = 1;
 			}
@@ -436,6 +289,7 @@ static int write_latex_batch_out(FILE *fout, const maxout_t *out)
 			if (mathenv) {
 				fputc('\n', fout);
 				fwrite(latex_math_env[1], 1, strlen(latex_math_env[1]), fout);
+				fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
 				mathenv = 0;
 			} else {
 				fputs(latex_text_sep, fout);
@@ -456,6 +310,8 @@ static int write_latex_batch_out(FILE *fout, const maxout_t *out)
 	fputc('\n', fout);
 	if (mathenv)
 		fwrite(latex_math_env[1], 1, strlen(latex_math_env[1]), fout);
+	else
+		fwrite(latex_text_env[1], 1, strlen(latex_text_env[1]), fout);
 
 	return 0;
 }

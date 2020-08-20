@@ -48,11 +48,12 @@ static const char *latex_math_env[] = {
 };
 static const char *latex_math_sep = " \\\\\n";
 static const char *latex_text_env[] = {
-	"\\texttt{", "}"
+	"\\begin{verbatim}\n",
+	"\\end{verbatim}\n"
 };
 static const char *latex_text_sep = " \\\\\n";
 static const char *latex_plot_env[] = {
-	"\\includegraphics[width=0.8\\textwidth]{", "}"
+	"\\includegraphics[width=0.8\\textwidth]{", "}\n"
 };
 
 static const char *latex_cell_end = "\n";
