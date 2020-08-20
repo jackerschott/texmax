@@ -33,7 +33,15 @@ util.o: util.c
 
 install: target
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	cp -f vimax $(DESTDIR)$(PREFIX)/bin
-	chmod 755 $(DESTDIR)$(PREFIX)/bin/vimax
+	cp -f texmax $(DESTDIR)$(PREFIX)/bin
+	chmod 755 $(DESTDIR)$(PREFIX)/bin/texmax
+	mkdir -p $(DESTDIR)$(PREFIX)/share/texmax
+	cp -f init.lisp $(DESTDIR)$(PREFIX)/share/texmax
+	cp -f init.mac $(DESTDIR)$(PREFIX)/share/texmax
+	chmod 644 $(DESTDIR)$(PREFIX)/share/texmax/init.lisp
+	chmod 644 $(DESTDIR)$(PREFIX)/share/texmax/init.mac
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/vimax
+	rm -f $(DESTDIR)$(PREFIX)/share/texmax/init.lisp
+	rm -f $(DESTDIR)$(PREFIX)/share/texmax/init.mac
+	rmdir $(DESTDIR)$(PREFIX)/share/texmax

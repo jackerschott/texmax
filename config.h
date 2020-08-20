@@ -12,7 +12,7 @@ static const char *log_name = "max.log";
 static char *const maxima_args[] = {
 	"maxima",
 	"--quiet",
-	"--init=init",
+	"--init=/usr/local/share/texmax/init",
 	NULL,
 };
 
