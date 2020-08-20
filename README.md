@@ -9,7 +9,7 @@ This program is designed to follow the unix philosophy and thus allow for easy
 integration into other software, while the main purpose is, of course, the
 integration into extensible text editors.
 
-![](https://github.com/jackerschott/texmax/raw/dev/screenshot.png)
+![](https://github.com/jackerschott/texmax/raw/master/screenshot.png)
 
 ## Usage
 If you run texmax it creates the following directories/files
