@@ -58,9 +58,8 @@ static const char *latex_plot_env[] = {
 
 static const char *latex_cell_end = "\n";
 
-static const char *plot_embed_args[] = {
-	"[gnuplot_term, png]",
-	"[gnuplot_out_file, \"test.png\"]"
+static const char *eplot_filename_arg_env[] = {
+	"[pdf_file, \"", "\"]"
 };
 
 #endif /* CONFIG_H */

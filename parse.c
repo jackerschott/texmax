@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "config.h"
 #include "parse.h"
@@ -30,16 +31,22 @@ static int check_func(const char *cmd, const char *name, char **argbeg, char **a
 		*argend = _argend;
 	return 0;
 }
-static void parse_func(const char *cmd, const char *name,
+static int parse_func(const char *cmd, const char *name,
 		const char *argbeg, const char *argend, func_t *f)
 {
 	size_t namelen = strlen(name);
-	f->name = emalloc(namelen + 1);
+	f->name = malloc(namelen + 1);
+	if (!f->name)
+		return 1;
 	strcpy(f->name, name);
 
 	size_t argstrlen = argend - argbeg;
 	size_t nargsmax = (argstrlen + 1) / 2;
-	f->args = emalloc(nargsmax * sizeof(char *));
+	f->args = malloc(nargsmax * sizeof(char *));
+	if (!f->args) {
+		free(f->name);
+		return 1;
+	}
 
 	unsigned int nargs = 0;
 	char *cs = (char *)argbeg;
@@ -49,7 +56,9 @@ static void parse_func(const char *cmd, const char *name,
 		arglen = ce - cs;
 		arglen = strip(cs, arglen, &cs);
 
-		f->args[nargs] = emalloc(arglen + 1);
+		f->args[nargs] = malloc(arglen + 1);
+		if (!f->args[nargs])
+			goto out_alloc_err;
 		strncpy(f->args[nargs], cs, arglen);
 		f->args[nargs][arglen] = '\0';
 		++nargs;
@@ -59,12 +68,26 @@ static void parse_func(const char *cmd, const char *name,
 	arglen = argend - cs;
 	arglen = strip(cs, arglen, &cs);
 
-	f->args[nargs] = emalloc(arglen + 1);
+	f->args[nargs] = malloc(arglen + 1);
+	if (!f->args[nargs])
+		goto out_alloc_err;
 	strncpy(f->args[nargs], cs, arglen);
 	f->args[nargs][arglen] = '\0';
 
 	f->nargs = nargs + 1;
-	f->args = erealloc(f->args, nargs * sizeof(char *));
+	char **newargs = realloc(f->args, nargs * sizeof(char *));
+	if (!newargs)
+		goto out_alloc_err;
+	f->args = newargs;
+	return 0;
+
+out_alloc_err:
+	for (unsigned int i = 0; i < nargs; ++i) {
+		free(f->args[i]);
+	}
+	free(f->args);
+	free(f->name);
+	return 1;
 }
 static void free_func(func_t *f)
 {
@@ -72,6 +95,7 @@ static void free_func(func_t *f)
 	for (unsigned int i = 0; i < f->nargs; ++i) {
 		free(f->args[i]);
 	}
+	free(f->args);
 }
 static void func_to_str(func_t *f, char *s, size_t *size)
 {
@@ -107,36 +131,76 @@ int is_valid(const char *cmd)
 
 	return 1;
 }
-cmdtype_t preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize)
+int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type)
 {
 	size_t cmdlen = strlen(cmd);
 
 	func_t f;
 	char *argbeg, *argend;
 	if (!check_func(cmd, "eplot2d", &argbeg, &argend)) {
-		parse_func(cmd, "eplot2d", argbeg, argend, &f);
+		if (parse_func(cmd, "eplot2d", argbeg, argend, &f))
+			return 1;
 		char *fbeg = argbeg - 1 - strlen(f.name);
 		char *fend = argend + 1;
 
+		/* Set name and arguments for new function */
 		const char newname[] = "plot2d";
 		f.name = erealloc(f.name, sizeof(newname));
 		strcpy(f.name, newname);
 
-		size_t dn = LENGTH(plot_embed_args);
-		f.nargs += dn;
-		f.args = erealloc(f.args, f.nargs * sizeof(char *));
-		for (int i = 0; i < dn; ++i) {
-			int j = f.nargs - dn + i;
-			f.args[j] = emalloc(strlen(plot_embed_args[i]) + 1);
-			strcpy(f.args[j], plot_embed_args[i]);
+		/* Set argument which determines filename of output file */
+		char fplotname[] = "/tmp/texmax_plot_XXXXXX.pdf";
+		int fplot = mkstemps(fplotname, 4);
+		if (fplot == -1) {
+			free_func(&f);
+			return 2;
 		}
+		close(fplot);
 
+		size_t fnamearglen = strlen(eplot_filename_arg_env[0])
+			+ strlen(fplotname)
+			+ strlen(eplot_filename_arg_env[1]);
+		char *fnamearg = malloc(fnamearglen + 1);
+		if (!fnamearg) {
+			free_func(&f);
+			return 1;
+		}
+		fnamearg[0] = '\0';
+		strcat(fnamearg, eplot_filename_arg_env[0]);
+		strcat(fnamearg, fplotname);
+		strcat(fnamearg, eplot_filename_arg_env[1]);
+
+		/* Append new argument to function */
+		char **newargs = realloc(f.args, (f.nargs + 1) * sizeof(char *));
+		if (!newargs) {
+			free(fnamearg);
+			free_func(&f);
+			return 1;
+		}
+		f.args = newargs;
+
+		f.args[f.nargs] = malloc(strlen(fnamearg) + 1);
+		if (!f.args[f.nargs]) {
+			free(fnamearg);
+			free_func(&f);
+			return 1;
+		}
+		strcpy(f.args[f.nargs], fnamearg);
+		f.nargs += 1;
+		free(fnamearg);
+
+		/* Convert function back to string */
 		size_t newfstrsize;
 		func_to_str(&f, NULL, &newfstrsize);
-		char *newfstr = emalloc(newfstrsize);
+		char *newfstr = malloc(newfstrsize);
+		if (!newfstr) {
+			free_func(&f);
+			return 1;
+		}
 		func_to_str(&f, newfstr, NULL);
 		free_func(&f);
 
+		/* Replace function with new function in command string */
 		size_t newpcmdsize = cmdlen + newfstrsize - (fend - fbeg) + 2;
 		if (newpcmdsize > *pcmdsize) {
 			*pcmd = erealloc(*pcmd, newpcmdsize);
@@ -149,7 +213,8 @@ cmdtype_t preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize)
 		strcat(*pcmd, fend);
 		strcat(*pcmd, "\n");
 
-		return CMD_EPLOT;
+		*type = CMD_EPLOT;
+		return 0;
 	}
 
 	size_t newcmdsize = cmdlen + 2;
@@ -160,9 +225,13 @@ cmdtype_t preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize)
 	strcpy(*pcmd, cmd);
 	strcat(*pcmd, "\n");
 
-	if (!check_func(cmd, "batch", NULL, NULL))
-		return CMD_BATCH;
-	return CMD_MATH;
+	if (!check_func(cmd, "batch", NULL, NULL)) {
+		*type = CMD_BATCH;
+		return 0;
+	}
+
+	*type = CMD_MATH;
+	return 0;
 }
 
 int has_prompt(const char *out)

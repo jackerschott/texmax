@@ -304,7 +304,11 @@ static int handle_com(const char *arg)
 		printf("invalid maxima command\n");
 		return 1;
 	}
-	cmdtype_t cmdtype = preparse_cmd(arg, &parsedcmd, &parsedcmdsize);
+
+	cmdtype_t cmdtype;
+	if (preparse_cmd(arg, &parsedcmd, &parsedcmdsize, &cmdtype))
+		die(1, "preparse_cmd:");
+
 	send_maxima_cmd(parsedcmd);
 	process_maxima_out(cmdtype, arg);
 	return 0;
@@ -331,7 +335,11 @@ static int handle_bat(const char *arg)
 			retval = 1;
 			break;
 		}
-		cmdtype_t cmdtype = preparse_cmd(s, &parsedcmd, &parsedcmdsize);
+
+		cmdtype_t cmdtype;
+		if (preparse_cmd(s, &parsedcmd, &parsedcmdsize, &cmdtype))
+			die(1, "preparse_cmd:");
+
 		send_maxima_cmd(parsedcmd);
 		process_maxima_out(cmdtype, s);
 	}
