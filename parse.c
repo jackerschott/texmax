@@ -1,9 +1,12 @@
 #include <ctype.h>
+#include <dirent.h>
 #include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "config.h"
 #include "parse.h"
@@ -120,6 +123,7 @@ static void func_to_str(func_t *f, char *s, size_t *size)
 	}
 	strcat(s, ")");
 }
+
 int is_valid(const char *cmd)
 {
 	if (strncmp(cmd, "??", 2) == 0)
@@ -139,43 +143,58 @@ int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type
 	char *argbeg, *argend;
 	if (!check_func(cmd, "eplot2d", &argbeg, &argend)) {
 		if (parse_func(cmd, "eplot2d", argbeg, argend, &f))
-			return 1;
+			return -1;
 		char *fbeg = argbeg - 1 - strlen(f.name);
 		char *fend = argend + 1;
 
 		/* Set name and arguments for new function */
 		const char newname[] = "plot2d";
-		f.name = erealloc(f.name, sizeof(newname));
+		char *p = realloc(f.name, sizeof(newname));
+		if (!p) {
+			free_func(&f);
+			return -1;
+		}
+		f.name = p;
 		strcpy(f.name, newname);
 
 		/* Set argument which determines filename of output file */
-		char fplotname[] = "/tmp/texmax_plot_XXXXXX.pdf";
-		int fplot = mkstemps(fplotname, 4);
-		if (fplot == -1) {
+		const char *fplotname = "plot_XXXXXX.pdf";
+		char *fplotpath = malloc(strlen(output_dir) + strlen(fplotname) + 1);
+		if (!fplotpath) {
 			free_func(&f);
-			return 2;
+			return -1;
+		}
+
+		pathcat(output_dir, fplotname, fplotpath);
+		int fplot = mkstemps(fplotpath, 4);
+		if (fplot == -1) {
+			free(fplotpath);
+			free_func(&f);
+			return -1;
 		}
 		close(fplot);
 
 		size_t fnamearglen = strlen(eplot_filename_arg_env[0])
-			+ strlen(fplotname)
+			+ strlen(fplotpath)
 			+ strlen(eplot_filename_arg_env[1]);
 		char *fnamearg = malloc(fnamearglen + 1);
 		if (!fnamearg) {
+			free(fplotpath);
 			free_func(&f);
-			return 1;
+			return -1;
 		}
 		fnamearg[0] = '\0';
 		strcat(fnamearg, eplot_filename_arg_env[0]);
-		strcat(fnamearg, fplotname);
+		strcat(fnamearg, fplotpath);
 		strcat(fnamearg, eplot_filename_arg_env[1]);
+		free(fplotpath);
 
 		/* Append new argument to function */
 		char **newargs = realloc(f.args, (f.nargs + 1) * sizeof(char *));
 		if (!newargs) {
 			free(fnamearg);
 			free_func(&f);
-			return 1;
+			return -1;
 		}
 		f.args = newargs;
 
@@ -183,7 +202,7 @@ int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type
 		if (!f.args[f.nargs]) {
 			free(fnamearg);
 			free_func(&f);
-			return 1;
+			return -1;
 		}
 		strcpy(f.args[f.nargs], fnamearg);
 		f.nargs += 1;
@@ -195,7 +214,7 @@ int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type
 		char *newfstr = malloc(newfstrsize);
 		if (!newfstr) {
 			free_func(&f);
-			return 1;
+			return -1;
 		}
 		func_to_str(&f, newfstr, NULL);
 		free_func(&f);
@@ -203,7 +222,12 @@ int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type
 		/* Replace function with new function in command string */
 		size_t newpcmdsize = cmdlen + newfstrsize - (fend - fbeg) + 2;
 		if (newpcmdsize > *pcmdsize) {
-			*pcmd = erealloc(*pcmd, newpcmdsize);
+			char *p = realloc(*pcmd, newpcmdsize);
+			if (!p) {
+				free(newfstr);
+				return -1;
+			}
+			*pcmd = p;
 			*pcmdsize = newpcmdsize;
 		}
 
@@ -219,7 +243,10 @@ int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type
 
 	size_t newcmdsize = cmdlen + 2;
 	if (newcmdsize > *pcmdsize) {
-		*pcmd = erealloc(*pcmd, newcmdsize);
+		char *p = realloc(*pcmd, newcmdsize);
+		if (!p)
+			return -1;
+		*pcmd = p;
 		*pcmdsize = newcmdsize;
 	}
 	strcpy(*pcmd, cmd);
@@ -232,6 +259,58 @@ int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type
 
 	*type = CMD_MATH;
 	return 0;
+}
+int remove_plot_files()
+{
+	regex_t fplotname;
+	int reti = regcomp(&fplotname, "plot_[a-zA-Z0-9]{6}.pdf", REG_EXTENDED);
+	if (reti) {
+		regfree(&fplotname);
+		return 1;
+	}
+
+	DIR *d = opendir(output_dir);
+	if (!d) {
+		regfree(&fplotname);
+		return -1;
+	}
+
+	struct dirent *e;
+	int retval = 0;
+	errno = 0;
+	while ((e = readdir(d))) {
+		if (e->d_type != DT_REG)
+			continue;
+
+		if (regexec(&fplotname, e->d_name, 0, NULL, 0) == 0) {
+			char *name = malloc(strlen(output_dir) + strlen(e->d_name) + 1);
+			if (!name) {
+				retval = -1;
+				goto out_free;
+			}
+			pathcat(output_dir, e->d_name, name);
+
+			if (unlink(name) == -1) {
+				free(name);
+				retval = -1;
+				goto out_free;
+			}
+			free(name);
+		}
+	}
+	if (errno) {
+		retval = -1;
+		goto out_free;
+	}
+
+out_free:
+	regfree(&fplotname);
+	if (!closedir(d)) {
+		if (retval)
+			return retval;
+		return -1;
+	}
+	return retval;
 }
 
 int has_prompt(const char *out)
@@ -437,35 +516,6 @@ int parse_maxima_out(maxout_t *out, const char *str, const size_t strlen)
 	}
 
 	regfree(&outprompt);
-
-	/* Testing */
-	printf("pout:\n");
-	printf("\tcapchunks: %lu\n", out->capchunks);
-	printf("\tnchunks: %lu\n", out->nchunks);
-	for (int i = 0; i < out->nchunks; ++i) {
-		if (out->chunks[i].type == CHUNK_MSG) {
-			printf("\tmsg:\n");
-			msg_t *m = ((msg_t *)out->chunks[i].content);
-			printf("\t\ttext: %s\n", m->text);
-		} else if (out->chunks[i].type == CHUNK_INPROMPT) {
-			printf("\tprompt:\n");
-			inprompt_t *p = ((inprompt_t *)out->chunks[i].content);
-			printf("\t\ttext: %s\n", p->text);
-		} else if (out->chunks[i].type == CHUNK_RESULT) {
-			printf("\tresult:\n");
-			result_t *r = ((result_t *)out->chunks[i].content);
-			printf("\t\ttext: %s\n", r->text);
-			printf("\t\tlatex: %s\n", r->latex);
-		} else if (out->chunks[i].type == CHUNK_QUESTION) {
-			printf("\tquestion:\n");
-			question_t *q = ((question_t *)out->chunks[i].content);
-			printf("\t\ttext: %s\n", q->text);
-			printf("\t\tlatex: %s\n", q->latex);
-			printf("\t\tanswer: %s\n", q->answer);
-		}
-	}
-	printf("\n");
-
 	return 0;
 }
 
@@ -504,13 +554,10 @@ int set_answer(maxout_t *o, const char *answer)
 	if (o->nchunks == 0 || o->chunks[o->nchunks - 1].type != CHUNK_QUESTION)
 		return 1;
 
-	char *ans;
-	size_t n = strip(answer, strlen(answer), &ans);
-
 	question_t *q = o->chunks[o->nchunks - 1].content;
-	q->answer = malloc(n + 1);
+	q->answer = malloc(strlen(answer) + 1);
 	if (!q->answer)
 		return 2;
-	strncpy(q->answer, ans, n);
+	strcpy(q->answer, answer);
 	return 0;
 }

@@ -72,12 +72,12 @@ size_t strip(const char *s, size_t n, char **o)
 	}
 
 	char *c = (char *)(s + n - 1);
-	while (c - s > 0 && !isprint(*c))
+	while (c - s > 0 && (!isprint(*c) || *c == ' '))
 		--c;
 	int ns = (c - s) + 1;
 
 	c = (char *)s;
-	while (c - s < ns && !isprint(*c))
+	while (c - s < ns && (!isprint(*c) || *c == ' '))
 		++c;
 	if (o)
 		*o = c;

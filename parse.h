@@ -74,6 +74,8 @@ struct maxout_t {
 
 int is_valid(const char *cmd);
 int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type);
+int remove_plot_files();
+
 int has_prompt(const char *out);
 
 maxout_t *alloc_maxima_out();

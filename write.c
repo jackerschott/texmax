@@ -199,7 +199,7 @@ static int write_latex_math_out(FILE *fout, const maxout_t *out)
 				fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
 				mathenv = 0;
 			} else {
-				fputs(latex_text_sep, fout);
+				fputc('\n', fout);
 			}
 
 			if (out->chunks[i].type == CHUNK_MSG) {
@@ -240,7 +240,7 @@ static int write_latex_eplot_out(FILE *fout, const maxout_t *out)
 			err = write_latex_eplot(fout, out->chunks[i].content);
 		} else {
 			if (textenv) {
-				fputs(latex_text_sep, fout);
+				fputc('\n', fout);
 			} else {
 				fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
 				textenv = 1;
@@ -292,7 +292,7 @@ static int write_latex_batch_out(FILE *fout, const maxout_t *out)
 				fwrite(latex_text_env[0], 1, strlen(latex_text_env[0]), fout);
 				mathenv = 0;
 			} else {
-				fputs(latex_text_sep, fout);
+				fputc('\n', fout);
 			}
 
 			if (out->chunks[i].type == CHUNK_MSG) {
@@ -337,16 +337,20 @@ int write_latex(const char *path, const maxout_t *out,
 		const char *prompt, const char *cmd, cmdtype_t cmdtype)
 {
 	if (out->nchunks == 0 || out->chunks[out->nchunks - 1].type != CHUNK_INPROMPT)
-		return 1;
+		return -1;
 
 	FILE *fout = fopen(path, "a");
 	if (!fout)
-		return 2;
+		return -1;
 
 	fwrite(latex_math_env[0], 1, strlen(latex_math_env[0]), fout);
 
 	size_t len = escape_special_tex_chars(prompt, NULL);
-	char *pmttex = emalloc(len + 1);
+	char *pmttex = malloc(len + 1);
+	if (!pmttex) {
+		fclose(fout);
+		return -1;
+	}
 	escape_special_tex_chars(prompt, pmttex);
 
 	fwrite(latex_prompt_env[0], 1, strlen(latex_prompt_env[0]), fout);
@@ -357,7 +361,11 @@ int write_latex(const char *path, const maxout_t *out,
 	fwrite(latex_align_sep, 1, strlen(latex_align_sep), fout);
 
 	len = escape_special_tex_chars(cmd, NULL);
-	char *cmdtex = emalloc(len + 1);
+	char *cmdtex = malloc(len + 1);
+	if (!cmdtex) {
+		fclose(fout);
+		return -1;
+	}
 	escape_special_tex_chars(cmd, cmdtex);
 
 	fwrite(latex_cmd_env[0], 1, strlen(latex_cmd_env[0]), fout);
@@ -374,10 +382,12 @@ int write_latex(const char *path, const maxout_t *out,
 		err = write_latex_batch_out(fout, out);
 
 	fwrite(latex_cell_end, 1, strlen(latex_cell_end), fout);
-	fclose(fout);
+
+	if (fclose(fout))
+		return -1;
 
 	if (err)
-		return 3;
+		return -1;
 	return 0;
 }
 int write_log(const char *path, const maxout_t *out, const char *prompt, const char *cmd)

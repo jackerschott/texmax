@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-static const char *cache_dir = ".texmax";
+static const char *output_dir = ".texmax";
 static const char *fifo_name = "cmd";
 static const char *latex_doc_name = "doc.tex";
 static const char *latex_res_name = "res.tex";
@@ -35,7 +35,7 @@ static const char *latex_samepage_env[] = {
 	"\\end{samepage}\n"
 };
 static const char *latex_prompt_env[] = {
-	"\\mbox{\\tt ", "\\black}"
+	"\\mbox{\\tt ", " \\black}"
 };
 static const char *latex_align_sep = "& ";
 static const char *latex_cmd_env[] = {
@@ -51,7 +51,6 @@ static const char *latex_text_env[] = {
 	"\\begin{verbatim}\n",
 	"\\end{verbatim}\n"
 };
-static const char *latex_text_sep = " \\\\\n";
 static const char *latex_plot_env[] = {
 	"\\includegraphics[width=0.8\\textwidth]{", "}\n"
 };
