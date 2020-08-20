@@ -542,7 +542,7 @@ int get_closing_prompt(const maxout_t *o, char **prompt, size_t *promptsize, pro
 	if (newpromptsize > *promptsize) {
 		*promptsize = newpromptsize;
 		char *p = realloc(*prompt, *promptsize);
-		if (!*p)
+		if (!p)
 			return 3;
 		*prompt = p;
 	}

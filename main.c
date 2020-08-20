@@ -18,8 +18,9 @@
 #include "util.h"
 #include "write.h"
 
-#define READSIZE_OUT 16384
+#define BUFSIZE_PROMPT 512
 #define BUFSIZE_IN 512
+#define READSIZE_OUT 16384
 
 #define BUFSIZE_ANS 16
 
@@ -208,7 +209,7 @@ static int get_answer(const char* question, char **answer, size_t *answersize)
 		}
 		ans = ansnew;
 	}
-	if (readlen == -1 || readlen == 0) {
+	if (readlen == -1) {
 		free(ans);
 		return -1;
 	}
@@ -218,13 +219,13 @@ static int get_answer(const char* question, char **answer, size_t *answersize)
 	// TODO: Does not strip '   positive   '
 	// TODO: Problem with 'positive;' and probably other invalid answers
 
-	if (ans[len - 1] == '\n')
+	if (len > 0 && ans[len - 1] == '\n')
 		--len;
-	if (ans[len - 1] == ';')
+	if (len > 0 && ans[len - 1] == ';')
 		--len;
 	char *sans;
 	size_t slen = strip(ans, len, &sans);
-	if (len + 2 > *answersize) {
+	if (len + 3 > *answersize) {
 		*answersize = len + 2;
 		char *answernew = realloc(*answer, *answersize);
 		if (!answernew) {
@@ -235,7 +236,8 @@ static int get_answer(const char* question, char **answer, size_t *answersize)
 	}
 	strncpy(*answer, sans, slen);
 	(*answer)[slen] = ';';
-	(*answer)[slen + 1] = '\0';
+	(*answer)[slen + 1] = '\n';
+	(*answer)[slen + 2] = '\0';
 	free(ans);
 	return 0;
 }
@@ -639,7 +641,7 @@ int main(int argc, char* argv[])
 	outstrlen = read_maxima_out(&outstr, &outstrsize);
 
 	/* extract initial prompt */
-	inpromptsize = outstrlen + 1;
+	inpromptsize = BUFSIZE_PROMPT;
 	inprompt = malloc(inpromptsize);
 	if (!inprompt) {
 		perror("malloc");
