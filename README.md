@@ -1,6 +1,4 @@
 # texmax
-> This is a work in progress. Use at your own risk.
-
 ## Introduction
 Texmax is a minimal frontend for the free computer algebra system maxima.
 It uses LaTeX for output rendering while maxima commands are supplied via a
