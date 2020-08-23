@@ -390,6 +390,16 @@ int write_latex(const char *path, const maxout_t *out,
 		return -1;
 	return 0;
 }
+int clear_latex(const char *path)
+{
+	FILE *fout = fopen(path, "w");
+	if (!fout)
+		return -1;
+
+	if (fclose(fout) == EOF)
+		return -1;
+	return 0;
+}
 int write_log(const char *path, const maxout_t *out, const char *prompt, const char *cmd)
 {
 	if (out->nchunks == 0 || out->chunks[out->nchunks - 1].type != CHUNK_INPROMPT)

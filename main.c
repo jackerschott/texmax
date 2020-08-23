@@ -415,7 +415,10 @@ void split_cmd(char* cmd, char *action, char *arg)
 }
 static int handle_com(const char *arg, int *cmderr)
 {
-	if (!is_valid(arg)) {
+	if (ignore(arg)) {
+		*cmderr = 0;
+		return 0;
+	} else if (!is_valid(arg)) {
 		printf("`%s' is an invalid maxima command\n", arg);
 		*cmderr = 1;
 		return 0;
@@ -454,7 +457,9 @@ static int handle_bat(const char *arg, int *cmderr)
 		int n = strip(line, len, &s);
 		s[n] = '\0';
 
-		if (!is_valid(s)) {
+		if (ignore(s)) {
+			continue;
+		} else if (!is_valid(s)) {
 			printf("`%s' is an invalid maxima command\n", s);
 			*cmderr = 1;
 			break;
@@ -486,7 +491,13 @@ static int handle_bat(const char *arg, int *cmderr)
 	*cmderr = 0;
 	return 0;
 }
-static int handle_rst(const char *arg)
+static int handle_cls()
+{
+	if (clear_latex(latex_res_path))
+		return -1;
+	return 0;
+}
+static int handle_rst()
 {
 	if (stop_maxima())
 		return -1;
@@ -567,8 +578,10 @@ static void mainloop()
 			err = handle_com(arg, &cmderr);
 		} else if (strcmp(action, "bat") == 0) {
 			err = handle_bat(arg, &cmderr);
+		} else if (strcmp(action, "cls")) {
+			err = handle_cls();
 		} else if (strcmp(action, "rst") == 0) {
-			err = handle_rst(arg);
+			err = handle_rst();
 		} else if (strcmp(action, "end") == 0) {
 			break;
 		} else {

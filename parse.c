@@ -135,6 +135,18 @@ int is_valid(const char *cmd)
 
 	return 1;
 }
+
+int ignore(const char *cmd)
+{
+	size_t len = strlen(cmd);
+	if (len == 0)
+		return 1;
+
+	if (strncmp(cmd, "/*", 2) == 0 && strncmp(cmd + len - 2, "*/", 2) == 0)
+		return 1;
+
+	return 0;
+}
 int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type)
 {
 	size_t cmdlen = strlen(cmd);
