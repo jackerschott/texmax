@@ -333,7 +333,17 @@ int create_latex_doc(const char *path, const char *relrespath)
 	fclose(fdoc);
 	return 0;
 }
-int write_latex(const char *path, const maxout_t *out,
+int create_latex_res(const char *path)
+{
+	FILE *fout = fopen(path, "w");
+	if (!fout)
+		return -1;
+
+	if (fclose(fout) == EOF)
+		return -1;
+	return 0;
+}
+int write_latex_res(const char *path, const maxout_t *out,
 		const char *prompt, const char *cmd, cmdtype_t cmdtype)
 {
 	if (out->nchunks == 0 || out->chunks[out->nchunks - 1].type != CHUNK_INPROMPT)
@@ -390,16 +400,6 @@ int write_latex(const char *path, const maxout_t *out,
 		return -1;
 	return 0;
 }
-int clear_latex(const char *path)
-{
-	FILE *fout = fopen(path, "w");
-	if (!fout)
-		return -1;
-
-	if (fclose(fout) == EOF)
-		return -1;
-	return 0;
-}
 int write_log(const char *path, const maxout_t *out, const char *prompt, const char *cmd)
 {
 	if (out->nchunks == 0 || out->chunks[out->nchunks - 1].type != CHUNK_INPROMPT)
@@ -411,6 +411,7 @@ int write_log(const char *path, const maxout_t *out, const char *prompt, const c
 		return 2;
 
 	fwrite(prompt, 1, strlen(prompt), flog);
+	fputc(' ', flog);
 	fwrite(cmd, 1, strlen(cmd), flog);
 	fputc('\n', flog);
 	for (int i = 0; i < out->nchunks - 1; ++i) {
