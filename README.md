@@ -28,7 +28,8 @@ texmax, for example
 texmax then evaluates the action `com` with the argument `integrate(1/x,x);`,
 which means "compute the expression `integrate(1/x,x);` via maxima".
 The output will then be appended to `res.tex` which content gets included in
-`doc.tex`, such that `doc.tex` can be compiled via LaTeX.
+`doc.tex`, such that `doc.tex` can be compiled via LaTeX which can generate the
+maxima output as a pdf.
 
 Once texmax is finished a return code will be written to `cmd` which shows 
 potential errors while also indicating that `doc.tex` is ready for compilation.
@@ -43,9 +44,9 @@ example, with
 
 
 Aside from the action `com` there is also `bat` to evaluate a file (the filename
-is given as an argument) with maxima commands line by line, `rst` to restart
-maxima and `end` to terminate texmax (the argument is ignored for the last two
-actions).
+is given as the argument) with maxima commands line by line, `cls` to clear the
+latex document `rst` to restart maxima and `end` to terminate texmax (the
+argument is ignored for the last two actions).
 
 The file `max.log` simply serves as a log file for the maxima text output, which
 can be consulted if something goes wrong with the LaTeX version.
@@ -54,25 +55,65 @@ can be consulted if something goes wrong with the LaTeX version.
 ### Integration in vim
 To integrate texmax in vim add something like the following to your vimrc
 ```vim
+function! TexmaxStart()
+    silent exec "!texmax &"
+    silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
+    silent exec "!mimeo .tex/doc.pdf &"
+endfunction
+
+function! TexmaxStop()
+    silent exec "!echo \"end\" > .texmax/cmd"
+endfunction
+
+function! TexmaxRestart()
+    call TexmaxStop()
+    silent exec "!texmax &"
+    silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
+endfunction
+
+function! TexmaxClear()
+    silent exec "!echo \"cls\" > .texmax/cmd"
+    silent exec "!cat .texmax/cmd >/dev/null"
+    silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
+endfunction
+
+function! TexmaxRestartMaxima()
+    silent exec "!echo \"rst\" > .texmax/cmd"
+    silent exec "!cat .texmax/cmd >/dev/null"
+endfunction
+
 function! TexmaxExecLine()
-  let s:line = getline(".")
-  silent exec "!echo \"com\\n" . escape(getline("."), "%\"") . "\" > .texmax/cmd"
-  silent exec "!cat .texmax/cmd >/dev/null"
-  silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
+    let s:line = getline(".")
+    silent exec "!echo \"com\\n" . escape(getline("."), "%\"") . "\" > .texmax/cmd"
+    silent exec "!cat .texmax/cmd >/dev/null"
+    silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
 endfunction
 
 function! TexmaxExecFile()
-  let s:line = getline(".")
-  silent exec "!echo \"bat\\n".@%."\" > .texmax/cmd"
-  silent exec "!cat .texmax/cmd >/dev/null"
-  silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
+    call TexmaxClear()
+    let s:line = getline(".")
+    silent exec "!echo \"bat\\n".@%."\" > .texmax/cmd"
+    silent exec "!cat .texmax/cmd >/dev/null"
+    silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
 endfunction
 
-autocmd BufRead *.mac command! TexmaxStart silent exec "!texmax &"
-autocmd BufRead *.mac command! TexmaxStop silent exec "!echo \"end\" > .texmax/cmd"
-autocmd BufRead *.mac command! TexmaxRestartMaxima silent exec "!echo \"rst\" > .texmax/cmd"
+function! TexmaxExecFileAdd()
+    let s:line = getline(".")
+    silent exec "!echo \"bat\\n".@%."\" > .texmax/cmd"
+    silent exec "!cat .texmax/cmd >/dev/null"
+    silent exec "!latexmk -pdf -interaction=nonstopmode -output-directory=.tex .texmax/doc.tex"
+endfunction
+
+autocmd BufRead *.mac command! TexmaxStart :call TexmaxStart()
+autocmd BufRead *.mac command! TexmaxStop :call TexmaxStop()
+autocmd BufRead *.mac command! TexmaxClear :call TexmaxClear()
+autocmd BufRead *.mac command! TexmaxRestart :call TexmaxRestart()
+autocmd BufRead *.mac command! TexmaxRestartMaxima :call TexmaxRestartMaxima()
+autocmd BufRead *.mac nnoremap <leader>s :call TexmaxStart()<cr>
 autocmd BufRead *.mac nnoremap <space> :call TexmaxExecLine()<cr>
 autocmd BufRead *.mac nnoremap <enter> :call TexmaxExecFile()<cr>
+autocmd BufRead *.mac nnoremap <leader>a :call TexmaxExecFileAdd()<cr>
+autocmd BufRead *.mac nnoremap <leader>c :call TexmaxClear()<cr>
 autocmd BufRead *.mac nnoremap <leader>v :!mimeo .tex/doc.pdf<cr><cr>
 autocmd BufRead *.mac nnoremap <leader>vd :split .texmax/doc.tex<cr>
 autocmd BufRead *.mac nnoremap <leader>vr :split .texmax/res.tex<cr>
