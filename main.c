@@ -95,13 +95,14 @@ static int create_iofiles()
 		return 1;
 	}
 
-	if (create_latex_doc(latex_doc_path, latex_res_path)) {
+	if (create_latex_doc(latex_doc_path, latex_res_path))
 		goto err_del_files;
-	}
 
-	if (mkfifo(fifo_path, 0644) == -1) {
+	if (create_latex_res(latex_res_path))
 		goto err_del_files;
-	}
+
+	if (mkfifo(fifo_path, 0644) == -1)
+		goto err_del_files;
 
 	return 0;
 
@@ -172,6 +173,39 @@ static pid_t start_process(const char *file, char *const argv[], int fd[2])
 	return pid;
 }
 
+static size_t read_maxima_out(char **buf, size_t *size)
+{
+	size_t len = 0;
+	size_t remsize = *size;
+	struct pollfd pfdin = { .fd = fmaxout, .events = POLLIN };
+	do {
+		int res = poll(&pfdin, 1, 100);
+		if (!res)
+			return -1;
+
+		size_t readlen = read(fmaxout, *buf + len, remsize);
+		if (readlen == -1 || readlen == 0) {
+			return -1;
+		} else if (readlen == remsize) {
+			len += remsize;
+			remsize = READSIZE_OUT;
+			char *bufnew = realloc(*buf, len + remsize);
+			if (!bufnew)
+				return -1;
+			*buf = bufnew;
+			continue;
+		}
+
+		len += readlen;
+		remsize -= readlen;
+		/* No segfault because before decrement remsize > readlen holds.
+		   This is necessary for prompt check */
+		(*buf)[len] = '\0';
+	} while (!has_prompt(*buf));
+
+	*size = len + remsize;
+	return len;
+}
 static int get_answer(const char* question, char **answer, size_t *answersize)
 {
 	char *const qst = malloc(strlen(question) + 1);
@@ -241,45 +275,37 @@ static int get_answer(const char* question, char **answer, size_t *answersize)
 	free(ans);
 	return 0;
 }
-
 static int send_maxima_cmd(const char *cmd)
 {
 	if (write(fmaxcmd, cmd, strlen(cmd)) == -1)
 		return -1;
 	return 0;
 }
-static size_t read_maxima_out(char **buf, size_t *size)
+static int process_init_prompt()
 {
-	size_t len = 0;
-	size_t remsize = *size;
-	struct pollfd pfdin = { .fd = fmaxout, .events = POLLIN };
-	do {
-		int res = poll(&pfdin, 1, 100);
-		if (!res)
-			return -1;
+	/* read initial output */
+	outstrlen = read_maxima_out(&outstr, &outstrsize);
+	if (outstrlen == -1)
+		return -1;
 
-		size_t readlen = read(fmaxout, *buf + len, remsize);
-		if (readlen == -1 || readlen == 0) {
-			return -1;
-		} else if (readlen == remsize) {
-			len += remsize;
-			remsize = READSIZE_OUT;
-			char *bufnew = realloc(*buf, len + remsize);
-			if (!bufnew)
-				return -1;
-			*buf = bufnew;
-			continue;
-		}
+	/* extract initial prompt */
+	maxout_t *out = alloc_maxima_out();
+	if (!out)
+		return -1;
 
-		len += readlen;
-		remsize -= readlen;
-		/* No segfault because before decrement remsize > readlen holds.
-		   This is necessary for prompt check */
-		(*buf)[len] = '\0';
-	} while (!has_prompt(*buf));
+	if (parse_maxima_out(out, outstr, outstrlen)) {
+		free_maxima_out(out);
+		return -1;
+	}
 
-	*size = len + remsize;
-	return len;
+	prompttype_t pmttype;
+	if (get_closing_prompt(out, &inprompt, &inpromptsize, &pmttype)) {
+		free_maxima_out(out);
+		return -1;
+	}
+	free_maxima_out(out);
+
+	return 0;
 }
 static int process_maxima_out(const int cmdtype, const char *cmd)
 {
@@ -353,12 +379,12 @@ static int process_maxima_out(const int cmdtype, const char *cmd)
 	}
 
 	/* Write output to files */
-	if (write_latex(latex_res_path, out, inprompt, cmd, cmdtype)) {
+	if (write_latex_res(latex_res_path, out, inprompt, cmd, cmdtype)) {
 		retval = -1;
 		goto out_free;
 	}
 
-	if (write_log(log_path, out, inprompt, parsedcmd)) {
+	if (write_log(log_path, out, inprompt, cmd)) {
 		retval = -1;
 		goto out_free;
 	}
@@ -382,20 +408,7 @@ out_free:
 	return retval;
 }
 
-static int stop_maxima()
-{
-	int retval = 0;
-	if (close(fmaxout) == -1)
-		retval = 1;
-	if (close(fmaxcmd) == -1)
-		retval = 1;
-
-	if (waitpid(maxpid, NULL, 0) == -1)
-		retval = 1;
-
-	return retval;
-}
-void split_cmd(char* cmd, char *action, char *arg)
+static void split_cmd(char* cmd, char *action, char *arg)
 {
 	char *s;
 	int n = strip(cmd, strlen(cmd), &s);
@@ -415,7 +428,10 @@ void split_cmd(char* cmd, char *action, char *arg)
 }
 static int handle_com(const char *arg, int *cmderr)
 {
-	if (!is_valid(arg)) {
+	if (ignore(arg)) {
+		*cmderr = 0;
+		return 0;
+	} else if (!is_valid(arg)) {
 		printf("`%s' is an invalid maxima command\n", arg);
 		*cmderr = 1;
 		return 0;
@@ -454,7 +470,9 @@ static int handle_bat(const char *arg, int *cmderr)
 		int n = strip(line, len, &s);
 		s[n] = '\0';
 
-		if (!is_valid(s)) {
+		if (ignore(s)) {
+			continue;
+		} else if (!is_valid(s)) {
 			printf("`%s' is an invalid maxima command\n", s);
 			*cmderr = 1;
 			break;
@@ -486,17 +504,34 @@ static int handle_bat(const char *arg, int *cmderr)
 	*cmderr = 0;
 	return 0;
 }
-static int handle_rst(const char *arg)
+static int handle_cls()
 {
-	if (stop_maxima())
+	if (create_latex_res(latex_res_path))
+		return -1;
+	return 0;
+}
+static int handle_rst()
+{
+	/* Stop process */
+	if (close(fmaxout) == -1)
+		return -1;
+	if (close(fmaxcmd) == -1)
 		return -1;
 
+	if (waitpid(maxpid, NULL, 0) == -1)
+		return -1;
+
+	/* Restart process */
 	int p[2];
 	maxpid = start_process("maxima", maxima_args, p);
 	if (maxpid == -1)
 		return -1;
 	fmaxcmd = p[1];
 	fmaxout = p[0];
+
+	/* Handle init prompt */
+	if (process_init_prompt())
+		return -1;
 
 	return 0;
 }
@@ -567,8 +602,12 @@ static void mainloop()
 			err = handle_com(arg, &cmderr);
 		} else if (strcmp(action, "bat") == 0) {
 			err = handle_bat(arg, &cmderr);
+		} else if (strcmp(action, "cls") == 0) {
+			cmderr = 0;
+			err = handle_cls();
 		} else if (strcmp(action, "rst") == 0) {
-			err = handle_rst(arg);
+			cmderr = 0;
+			err = handle_rst();
 		} else if (strcmp(action, "end") == 0) {
 			break;
 		} else {
@@ -621,7 +660,7 @@ int main(int argc, char* argv[])
 	fmaxcmd = p[1];
 	fmaxout = p[0];
 
-	/* read initial output */
+	/* allocate memory for maxima output */
 	parsedcmdsize = BUFSIZE_IN;
 	parsedcmd = malloc(parsedcmdsize);
 	if (!parsedcmd) {
@@ -638,9 +677,7 @@ int main(int argc, char* argv[])
 		cleanup();
 		return -1;
 	}
-	outstrlen = read_maxima_out(&outstr, &outstrsize);
 
-	/* extract initial prompt */
 	inpromptsize = BUFSIZE_PROMPT;
 	inprompt = malloc(inpromptsize);
 	if (!inprompt) {
@@ -649,30 +686,12 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 
-	maxout_t *out = alloc_maxima_out();
-	if (!out) {
-		perror("alloc_maxima_out");
+	/* Start loop after handling initial prompt */
+	if (process_init_prompt()) {
+		perror("process_init_prompt");
 		cleanup();
 		return -1;
 	}
-
-	if (parse_maxima_out(out, outstr, outstrlen)) {
-		free_maxima_out(out);
-		perror("parse_maxima_out");
-		cleanup();
-		return -1;
-	}
-
-	prompttype_t pmttype;
-	if (get_closing_prompt(out, &inprompt, &inpromptsize, &pmttype)) {
-		free_maxima_out(out);
-		perror("get_closing_prompt");
-		cleanup();
-		return -1;
-	}
-	free_maxima_out(out);
-
-	/* start accepting commands */
 	mainloop();
 
 	if (cleanup())

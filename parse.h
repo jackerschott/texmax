@@ -73,6 +73,7 @@ struct maxout_t {
 };
 
 int is_valid(const char *cmd);
+int ignore(const char *cmd);
 int preparse_cmd(const char *cmd, char **pcmd, size_t *pcmdsize, cmdtype_t *type);
 int remove_plot_files();
 
